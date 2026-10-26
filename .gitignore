@@ -3,6 +3,24 @@ tv/__pycache__/
 tv/.aiopylgtv.sqlite*
 tv/.tv_root_key*
 tv/.tv_known_hosts
+tv/settings.toml
 tv/*.pyc
 tools/bscpylgtv/
 .aiopylgtv.sqlite*
+
+# Tauri, Vite, Rust, and packaged Python sidecar
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/binaries/
+tv/build/
+tv/dist/
+tv/*.spec
+
+# Local tooling and secrets
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log

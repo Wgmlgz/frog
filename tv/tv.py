@@ -8,6 +8,7 @@ import json
 import re
 import socket
 import time
+import tomllib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Lock
@@ -18,7 +19,8 @@ from bluetooth import BluetoothError, connect_audio_device, luna_call, paired_au
 
 
 HERE = Path(__file__).resolve().parent
-CONFIG = json.loads((HERE / "config.json").read_text(encoding="utf-8"))
+SETTINGS_FILE = HERE / "settings.toml"
+CONFIG = tomllib.loads((SETTINGS_FILE if SETTINGS_FILE.exists() else HERE / "settings.example.toml").read_text(encoding="utf-8"))
 KEY_FILE = HERE / ".aiopylgtv.sqlite"
 TV_LOCK = Lock()
 ROOT_KEY = HERE / ".tv_root_key"
