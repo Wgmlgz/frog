@@ -5,6 +5,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import BedsideLampPanel from './devices/bedside-lamp/BedsideLampPanel'
 import TvPanel from './devices/tv/TvPanel'
+import GlobalLightControls from './devices/bedside-lamp/GlobalLightControls'
 import AddDeviceWizard from './setup/AddDeviceWizard'
 
 type Device = { id: string; name: string; type: 'tv' | 'bedside_lamp' | 'color_bulb'; address: string }
@@ -14,6 +15,7 @@ export default function App() {
   const queryClient = useQueryClient()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
+  const [page, setPage] = useState<'main' | 'devices' | 'settings'>('main')
   const devices = useQuery({ queryKey: ['devices'], queryFn: () => invoke<Device[]>('list_devices') })
   const refresh = () => void queryClient.invalidateQueries({ queryKey: ['devices'] })
   const remove = useMutation({
@@ -43,21 +45,30 @@ export default function App() {
 
   return <div className="app-shell px-2.5 py-4">
     <div className="mx-auto max-w-[560px]">
-      <header className={`${selected ? 'mb-4' : 'mb-6'} flex items-center gap-3`}>
+      <header className="app-header flex items-center gap-3">
         {(selected || adding) && <button className="soft-button p-2.5" aria-label="Back to devices" onClick={() => { setSelectedId(null); setAdding(false); void invoke('cancel_device_setup') }}><ArrowLeft size={20} /></button>}
         <div className="flex size-11 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--secondary)] text-[var(--foreground)]"><Lightbulb size={23} strokeWidth={1.8} /></div>
         <div className="min-w-0 flex-1">
           {!selected && !adding && <p className="text-[11px] font-bold uppercase tracking-[.22em] text-[var(--muted-foreground)]">Frog</p>}
-          <h1 className="truncate text-xl font-semibold tracking-tight">{selected ? selected.name : adding ? 'Add device' : 'Devices'}</h1>
+          <h1 className="truncate text-xl font-semibold tracking-tight">{selected ? selected.name : adding ? 'Add device' : page === 'main' ? 'Main' : page === 'devices' ? 'Devices' : 'Settings'}</h1>
           {selected && <p className="mono truncate text-[11px] text-[var(--muted-foreground)]">{selected.address}</p>}
         </div>
       </header>
+
+      {!selected && !adding && <nav aria-label="Pages" className="tab-bar tab-bar--3">
+        {(['main', 'devices', 'settings'] as const).map(item => <button key={item}
+          className={`tab-button ${page === item ? 'is-active' : ''}`}
+          aria-current={page === item ? 'page' : undefined} onClick={() => setPage(item)}>{item}</button>)}
+      </nav>}
 
       {selected ? <>
         {selected.type === 'tv' ? <TvPanel key={selected.id} deviceId={selected.id} onUpdated={refresh} onRemove={removeSelected} isRemoving={remove.isPending} />
           : <BedsideLampPanel key={selected.id} deviceId={selected.id} onUpdated={refresh} onRemove={removeSelected} isRemoving={remove.isPending} />}
       </> : adding ? <AddDeviceWizard onDone={device => { refresh(); setAdding(false); setSelectedId(device.id); void invoke('cancel_device_setup') }}
-        onCancel={() => { setAdding(false); void invoke('cancel_device_setup') }} /> : <>
+        onCancel={() => { setAdding(false); void invoke('cancel_device_setup') }} /> : page === 'main' ? <>
+        {devices.error && <p className="mb-4 text-sm text-[var(--destructive)]">{message(devices.error)}</p>}
+        <GlobalLightControls lamps={devices.data?.filter(device => device.type !== 'tv') ?? []} loading={devices.isLoading} />
+      </> : page === 'devices' ? <>
         {devices.error && <p className="mb-4 text-sm text-[var(--destructive)]">{message(devices.error)}</p>}
         <div className="grid grid-cols-2 gap-3">
           {devices.data?.map(device => <button key={device.id}
@@ -72,7 +83,8 @@ export default function App() {
           <button className="panel flex min-h-36 flex-col items-center justify-center gap-2 border-dashed text-sm font-medium transition hover:bg-[var(--accent)]"
             onClick={() => setAdding(true)}><Plus size={24} /> Add device</button>
         </div>
-        <div className="mt-8 border-t border-[var(--border)] pt-5">
+      </> : <>
+        <div className="panel p-5">
           <h2 className="mb-3 text-sm font-semibold">Move to another controller</h2>
           <div className="grid grid-cols-2 gap-2">
             <button className="soft-button flex items-center justify-center gap-2 px-3 py-3 text-sm" disabled={exportConfig.isPending}

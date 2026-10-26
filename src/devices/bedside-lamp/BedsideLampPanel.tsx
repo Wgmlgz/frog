@@ -93,9 +93,9 @@ export default function BedsideLampPanel({ deviceId, onUpdated, onRemove, isRemo
   const color = `#${(state.data?.rgb ?? 0xffffff).toString(16).padStart(6, '0')}`
 
   return <section>
-    <div className="mb-3 grid grid-cols-2 gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1.5">
+    <div className="tab-bar tab-bar--2">
       {(['controls', 'settings'] as const).map(item => <button key={item}
-        className={`rounded-lg px-3 py-2 text-sm font-medium capitalize ${tab === item ? 'bg-[var(--secondary)] text-[var(--foreground)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'}`}
+        className={`tab-button ${tab === item ? 'is-active' : ''}`}
         onClick={() => setTab(item)}>{item}</button>)}
     </div>
     {tab === 'controls' && <div className="panel p-4">

@@ -106,9 +106,9 @@ export default function TvPanel({ deviceId, onUpdated, onRemove, isRemoving }: {
 
   return (
     <div>
-      <div className="mb-3 grid grid-cols-3 gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1.5">
+      <div className="tab-bar tab-bar--3">
         {(['audio', 'remote', 'settings'] as const).map(item => (
-          <button key={item} className={`rounded-lg px-3 py-2 text-sm font-medium capitalize ${tab === item ? 'bg-[var(--secondary)] text-[var(--foreground)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'}`}
+          <button key={item} className={`tab-button ${tab === item ? 'is-active' : ''}`}
             onClick={() => setTab(item)}>{item}</button>
         ))}
       </div>

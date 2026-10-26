@@ -74,6 +74,38 @@
 
 .mono { font-family: "IBM Plex Mono", monospace; }
 .app-shell { min-height: 100vh; background: var(--background); }
+.app-header { min-height: 68px; margin-bottom: 12px; }
+.tab-bar {
+  display: grid;
+  gap: 6px;
+  min-height: 50px;
+  margin-bottom: 12px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.tab-bar--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.tab-bar--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.tab-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+.tab-button:hover { color: var(--foreground); background: var(--accent); }
+.tab-button.is-active { color: var(--foreground); background: var(--secondary); }
 .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 24px 80px rgba(17, 24, 39, .10); }
 .soft-button { border: 1px solid var(--border); background: transparent; color: var(--foreground); border-radius: 6px; transition: background .15s; }
 .soft-button:hover:not(:disabled) { background: var(--accent); color: var(--accent-foreground); }
