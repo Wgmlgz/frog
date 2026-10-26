@@ -5,9 +5,7 @@ use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    fs,
     net::{Ipv4Addr, SocketAddrV4, UdpSocket},
-    path::PathBuf,
     sync::{
         atomic::{AtomicU32, Ordering},
         OnceLock,
@@ -17,7 +15,10 @@ use std::{
 use tauri::AppHandle;
 
 const MIIO_PORT: u16 = 54321;
+#[cfg(target_os = "windows")]
 const LAMP_DEVICE_ID: u32 = 75_416_834;
+#[cfg(target_os = "windows")]
+use std::{fs, path::PathBuf};
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default)]

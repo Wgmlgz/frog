@@ -1,0 +1,60 @@
+name: Android build
+
+on:
+  push:
+    branches: [main, release]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager 'platforms;android-37' 'ndk;28.2.13676358'
+          echo "NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Check frontend
+        run: |
+          npm run lint
+          npm run build
+
+      - name: Prepare and build APK
+        run: |
+          npm run android:prepare
+          npm run android:build:debug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frog-android-arm64-debug
+          path: src-tauri/gen/android/app/build/outputs/apk/universal/debug/*.apk
+          if-no-files-found: error

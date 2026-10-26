@@ -1416,6 +1416,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-clipboard-manager",
  "tauri-plugin-shell",
+ "tauri-plugin-tv-python",
  "tempfile",
  "tokio",
  "toml 0.8.2",
@@ -4940,6 +4941,15 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "windows-sys 0.60.2",
+]
+
+[[package]]
+name = "tauri-plugin-tv-python"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tauri",
+ "tauri-plugin",
 ]
 
 [[package]]

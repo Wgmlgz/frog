@@ -73,7 +73,12 @@
 }
 
 .mono { font-family: "IBM Plex Mono", monospace; }
-.app-shell { min-height: 100vh; background: var(--background); }
+.app-shell {
+  min-height: 100vh;
+  padding-top: max(1rem, calc(env(safe-area-inset-top, 0px) - 20px));
+  padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  background: var(--background);
+}
 .app-header { min-height: 68px; margin-bottom: 12px; }
 .tab-bar {
   display: grid;

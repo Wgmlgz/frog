@@ -1,0 +1,15 @@
+[package]
+name = "tauri-plugin-tv-python"
+version = "0.1.0"
+authors = [ "wgmlgz" ]
+description = "Android Python bridge for Frog's TV remote"
+edition = "2021"
+exclude = ["/examples", "/dist-js", "/guest-js", "/node_modules"]
+links = "tauri-plugin-tv-python"
+
+[dependencies]
+tauri = { version = "2" }
+serde = "1.0"
+
+[build-dependencies]
+tauri-plugin = { version = "2.7.2", features = ["build"] }

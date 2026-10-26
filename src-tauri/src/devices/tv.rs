@@ -8,10 +8,16 @@ use std::{
     time::Duration,
 };
 use russh::{client, keys::{self, PublicKeyOrCertificate}, ChannelMsg};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager};
+#[cfg(not(target_os = "android"))]
+use tauri::State;
 use crate::config::{self, DeviceSettings};
+#[cfg(not(target_os = "android"))]
 use tauri_plugin_shell::{process::{CommandChild, CommandEvent}, ShellExt};
+#[cfg(not(target_os = "android"))]
 use tokio::sync::{mpsc, Mutex};
+#[cfg(target_os = "android")]
+use tauri_plugin_tv_python::TvPythonExt;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -82,6 +88,7 @@ pub(crate) struct AudioState {
     sound_output: String,
 }
 
+#[cfg(not(target_os = "android"))]
 struct RemoteProcess {
     child: CommandChild,
     responses: mpsc::Receiver<String>,
@@ -89,6 +96,7 @@ struct RemoteProcess {
 
 #[derive(Default)]
 pub(crate) struct AppState {
+    #[cfg(not(target_os = "android"))]
     remote: Arc<Mutex<Option<RemoteProcess>>>,
 }
 
@@ -313,6 +321,7 @@ pub(crate) async fn connect_headphones(app: AppHandle, device_id: String) -> Res
     }).await.map_err(|e| e.to_string())?
 }
 
+#[cfg(not(target_os = "android"))]
 async fn start_remote(app: &AppHandle) -> Result<RemoteProcess, String> {
     let (mut events, child) = app.shell().sidecar("tv-python")
         .map_err(|e| e.to_string())?.spawn().map_err(|e| e.to_string())?;
@@ -332,6 +341,7 @@ async fn start_remote(app: &AppHandle) -> Result<RemoteProcess, String> {
     Ok(RemoteProcess { child, responses })
 }
 
+#[cfg(not(target_os = "android"))]
 pub(crate) async fn pair_ip(app: &AppHandle, ip: &str) -> Result<String, String> {
     let mut remote = start_remote(app).await?;
     let request = json!({"id":1,"action":"pair","tv_ip":ip,"client_key":""});
@@ -344,12 +354,32 @@ pub(crate) async fn pair_ip(app: &AppHandle, ip: &str) -> Result<String, String>
         .ok_or_else(|| "TV did not provide a pairing key".into())
 }
 
+#[cfg(target_os = "android")]
+fn mobile_request(app: &AppHandle, request: Value) -> Result<Value, String> {
+    let response = app.tv_python().request(&request.to_string()).map_err(|e| e.to_string())?;
+    serde_json::from_str(&response).map_err(|e| format!("Invalid TV response: {e}"))
+}
+
+#[cfg(target_os = "android")]
+pub(crate) async fn pair_ip(app: &AppHandle, ip: &str) -> Result<String, String> {
+    let app = app.clone();
+    let ip = ip.to_owned();
+    let response = tauri::async_runtime::spawn_blocking(move ||
+        mobile_request(&app, json!({"id":1,"action":"pair","tv_ip":ip,"client_key":""})))
+        .await.map_err(|e| e.to_string())??;
+    if response["ok"] != true { return Err(response["error"].as_str().unwrap_or("TV pairing failed").into()); }
+    response["client_key"].as_str().filter(|key| !key.is_empty()).map(str::to_owned)
+        .ok_or_else(|| "TV did not provide a pairing key".into())
+}
+
+const BUTTONS: &[&str] = &["UP","DOWN","LEFT","RIGHT","ENTER","BACK","EXIT","HOME","MENU","POWER","INPUT_HUB",
+    "MUTE","VOLUMEUP","VOLUMEDOWN","CHANNELUP","CHANNELDOWN","PLAY","PAUSE","STOP",
+    "REWIND","FASTFORWARD","INFO","GUIDE","RED","GREEN","YELLOW","BLUE",
+    "0","1","2","3","4","5","6","7","8","9"];
+
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub(crate) async fn remote_button(app: AppHandle, state: State<'_, AppState>, device_id: String, button: String) -> Result<(), String> {
-    const BUTTONS: &[&str] = &["UP","DOWN","LEFT","RIGHT","ENTER","BACK","EXIT","HOME","MENU","POWER","INPUT_HUB",
-        "MUTE","VOLUMEUP","VOLUMEDOWN","CHANNELUP","CHANNELDOWN","PLAY","PAUSE","STOP",
-        "REWIND","FASTFORWARD","INFO","GUIDE","RED","GREEN","YELLOW","BLUE",
-        "0","1","2","3","4","5","6","7","8","9"];
     if !BUTTONS.contains(&button.as_str()) { return Err("Unsupported remote button".into()); }
     let remote = state.remote.clone();
     let mut guard = remote.lock().await;
@@ -362,6 +392,31 @@ pub(crate) async fn remote_button(app: AppHandle, state: State<'_, AppState>, de
     let line = tokio::time::timeout(Duration::from_secs(20), process.responses.recv())
         .await.map_err(|_| "Remote request timed out".to_string())?.ok_or("Remote process ended")?;
     let response: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
+    if response["ok"] != true { return Err(response["error"].as_str().unwrap_or("Remote command failed").into()); }
+    if let Some(key) = response["client_key"].as_str() {
+        if key != config.webos_client_key {
+            config::update(&app, |store| {
+                let device = store.device_mut(&device_id)?;
+                let DeviceSettings::Tv(settings) = &mut device.settings else { return Err("Selected device is not a TV".into()) };
+                settings.webos_client_key = key.to_owned();
+                Ok(())
+            })?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub(crate) async fn remote_button(app: AppHandle, device_id: String, button: String) -> Result<(), String> {
+    if !BUTTONS.contains(&button.as_str()) { return Err("Unsupported remote button".into()); }
+    let config = config::tv(&app, &device_id)?;
+    let request = json!({"id":1,"action":"button","button":button,"tv_ip":config.tv_ip,
+        "client_key":config.webos_client_key});
+    let response = tauri::async_runtime::spawn_blocking({
+        let app = app.clone();
+        move || mobile_request(&app, request)
+    }).await.map_err(|e| e.to_string())??;
     if response["ok"] != true { return Err(response["error"].as_str().unwrap_or("Remote command failed").into()); }
     if let Some(key) = response["client_key"].as_str() {
         if key != config.webos_client_key {

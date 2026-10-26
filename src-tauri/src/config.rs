@@ -255,10 +255,18 @@ pub(crate) fn export_config_to_clipboard(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub(crate) fn import_config_from_clipboard(app: AppHandle) -> Result<Vec<DeviceSummary>, String> {
+    #[cfg(not(target_os = "android"))]
     let content = app
         .clipboard()
         .read_text()
         .map_err(|e| format!("Clipboard import failed: {e}"))?;
+    #[cfg(target_os = "android")]
+    let content = {
+        use tauri_plugin_tv_python::TvPythonExt;
+        app.tv_python()
+            .read_clipboard_text()
+            .map_err(|e| format!("Clipboard import failed: {e}"))?
+    };
     let imported = parse(&content)?;
     let summaries = imported.devices.iter().map(DeviceSummary::from).collect();
     let _guard = lock().lock().map_err(|e| e.to_string())?;

@@ -233,7 +233,6 @@ pub(crate) async fn use_xiaomi_account(
     .map_err(|e| e.to_string())?
 }
 
-#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub(crate) async fn pair_new_tv(
     app: AppHandle,
@@ -250,7 +249,6 @@ pub(crate) async fn pair_new_tv(
     Ok(())
 }
 
-#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub(crate) fn finish_new_tv(
     app: AppHandle,

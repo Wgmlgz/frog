@@ -17,6 +17,7 @@ src-tauri/binaries/
 tv/build/
 tv/dist/
 tv/*.spec
+tauri-plugin-tv-python/android/src/main/python/
 
 # Local tooling and secrets
 .env

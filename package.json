@@ -10,6 +10,10 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
+    "android:prepare": "tauri android init --ci --skip-targets-install && node scripts/configure-android.mjs",
+    "android:build:apk": "node scripts/configure-android.mjs && tauri android build --apk --target aarch64",
+    "android:build:debug": "node scripts/configure-android.mjs && tauri android build --debug --apk --target aarch64",
+    "android:build:aab": "node scripts/configure-android.mjs && tauri android build --aab --target aarch64 --target x86_64",
     "sidecar": "node scripts/build-sidecar.mjs"
   },
   "dependencies": {
