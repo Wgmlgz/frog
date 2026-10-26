@@ -47,9 +47,9 @@ async def main() -> None:
             request_id = request.get("id")
             if request.get("action") == "ping":
                 result = "pong"
-            elif request.get("action") == "button":
+            elif request.get("action") in ("button", "pair"):
                 button = request.get("button")
-                if button not in BUTTONS:
+                if request.get("action") == "button" and button not in BUTTONS:
                     raise ValueError("Unsupported remote button")
                 ip = request["tv_ip"]
                 client_key = request.get("client_key") or None
@@ -58,12 +58,13 @@ async def main() -> None:
                         await client.disconnect()
                     client = await WebOsClient.create(
                         ip, storage=MemoryStorage(client_key), states=[], ping_interval=None,
-                        timeout_connect=10, connect_retry_attempts=1,
+                        timeout_connect=45 if request.get("action") == "pair" else 10,
+                        connect_retry_attempts=1,
                     )
                     await client.connect()
                     identity = ip
                 try:
-                    result = await client.button(button)
+                    result = await client.button(button) if request.get("action") == "button" else "paired"
                 except Exception:
                     await client.disconnect()
                     client = None

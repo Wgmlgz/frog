@@ -308,6 +308,18 @@ async fn start_remote(app: &AppHandle) -> Result<RemoteProcess, String> {
     Ok(RemoteProcess { child, responses })
 }
 
+pub(crate) async fn pair_ip(app: &AppHandle, ip: &str) -> Result<String, String> {
+    let mut remote = start_remote(app).await?;
+    let request = json!({"id":1,"action":"pair","tv_ip":ip,"client_key":""});
+    remote.child.write(format!("{}\n", request).as_bytes()).map_err(|e| e.to_string())?;
+    let line = tokio::time::timeout(Duration::from_secs(75), remote.responses.recv())
+        .await.map_err(|_| "TV pairing timed out".to_string())?.ok_or("TV pairing process ended")?;
+    let response: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
+    if response["ok"] != true { return Err(response["error"].as_str().unwrap_or("TV pairing failed").into()); }
+    response["client_key"].as_str().filter(|key| !key.is_empty()).map(str::to_owned)
+        .ok_or_else(|| "TV did not provide a pairing key".into())
+}
+
 #[tauri::command]
 pub(crate) async fn remote_button(app: AppHandle, state: State<'_, AppState>, device_id: String, button: String) -> Result<(), String> {
     const BUTTONS: &[&str] = &["UP","DOWN","LEFT","RIGHT","ENTER","BACK","EXIT","HOME","MENU","POWER","INPUT_HUB",

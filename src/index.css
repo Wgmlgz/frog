@@ -82,6 +82,32 @@
 .primary-button:hover:not(:disabled) { filter: brightness(1.1); }
 .field { width: 100%; background: var(--input); border: 1px solid var(--border); color: var(--foreground); border-radius: 6px; padding: 10px 12px; }
 .range { width: 100%; accent-color: var(--primary); }
+.brightness-range, .temperature-range {
+  appearance: none;
+  height: 10px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.brightness-range { background: linear-gradient(90deg, #343b47 0%, #858b94 50%, #fff8e8 100%); }
+.temperature-range { background: linear-gradient(90deg, #ff9b43 0%, #ffd29b 28%, #fff1da 55%, #e1efff 78%, #a8d1ff 100%); }
+.brightness-range::-webkit-slider-thumb, .temperature-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border: 2px solid #536274;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px #0004;
+}
+.brightness-range::-moz-range-thumb, .temperature-range::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #536274;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px #0004;
+}
+.brightness-range:disabled, .temperature-range:disabled { cursor: not-allowed; opacity: .5; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .5; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }

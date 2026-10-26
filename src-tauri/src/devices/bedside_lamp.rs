@@ -43,15 +43,17 @@ pub(crate) struct LampConfigView {
     ip: String,
     device_id: u32,
     has_token: bool,
+    is_color: bool,
 }
 
 impl LampConfigView {
-    fn from_config(name: &str, config: &LampConfig) -> Self {
+    fn from_config(name: &str, config: &LampConfig, is_color: bool) -> Self {
         Self {
             name: name.into(),
             ip: config.ip.clone(),
             device_id: config.device_id,
             has_token: !config.token.is_empty(),
+            is_color,
         }
     }
 }
@@ -69,6 +71,7 @@ pub(crate) struct LampState {
     power: bool,
     brightness: u8,
     temperature: u16,
+    rgb: Option<u32>,
 }
 
 impl LampConfig {
@@ -248,10 +251,10 @@ fn property_u16(value: &Value, name: &str) -> Result<u16, String> {
         .ok_or_else(|| format!("Lamp did not report {name}"))
 }
 
-fn read_state(config: &LampConfig) -> Result<LampState, String> {
-    let result = send(config, "get_prop", json!(["power", "bright", "ct"]))?;
+pub(crate) fn read_state(config: &LampConfig) -> Result<LampState, String> {
+    let result = send(config, "get_prop", json!(["power", "bright", "ct", "rgb"]))?;
     let values = result.as_array().ok_or("Invalid lamp status")?;
-    if values.len() != 3 {
+    if values.len() != 4 {
         return Err("Incomplete lamp status".into());
     }
     let power = match values[0].as_str() {
@@ -265,7 +268,19 @@ fn read_state(config: &LampConfig) -> Result<LampState, String> {
             .try_into()
             .map_err(|_| "Invalid lamp brightness")?,
         temperature: property_u16(&values[2], "color temperature")?,
+        rgb: values[3]
+            .as_str()
+            .and_then(|text| text.parse().ok())
+            .or_else(|| values[3].as_u64().and_then(|number| number.try_into().ok())),
     })
+}
+
+pub(crate) fn device_model(config: &LampConfig) -> Result<String, String> {
+    let info = send(config, "miIO.info", json!([]))?;
+    info["model"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or("Lamp did not report its model".into())
 }
 
 fn change(
@@ -291,9 +306,12 @@ pub(crate) fn get_lamp_config(app: AppHandle, device_id: String) -> Result<LampC
     let device = store.device(&device_id)?;
     match &device.settings {
         DeviceSettings::BedsideLamp(settings) => {
-            Ok(LampConfigView::from_config(&device.name, settings))
+            Ok(LampConfigView::from_config(&device.name, settings, true))
         }
-        _ => Err("Selected device is not a bedside lamp".into()),
+        DeviceSettings::ColorBulb(settings) => {
+            Ok(LampConfigView::from_config(&device.name, settings, true))
+        }
+        _ => Err("Selected device is not a lamp".into()),
     }
 }
 
@@ -305,8 +323,10 @@ pub(crate) fn save_lamp_config(
 ) -> Result<LampConfigView, String> {
     config::update(&app, |store| {
         let device = store.device_mut(&device_id)?;
-        let DeviceSettings::BedsideLamp(stored) = &mut device.settings else {
-            return Err("Selected device is not a bedside lamp".into());
+        let (stored, is_color) = match &mut device.settings {
+            DeviceSettings::BedsideLamp(settings) => (settings, true),
+            DeviceSettings::ColorBulb(settings) => (settings, true),
+            _ => return Err("Selected device is not a lamp".into()),
         };
         device.name = config.name;
         stored.ip = config.ip;
@@ -315,7 +335,7 @@ pub(crate) fn save_lamp_config(
             stored.token = config.token;
         }
         stored.validate()?;
-        Ok(LampConfigView::from_config(&device.name, stored))
+        Ok(LampConfigView::from_config(&device.name, stored, is_color))
     })
 }
 
@@ -381,6 +401,29 @@ pub(crate) async fn set_lamp_temperature(
     .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+pub(crate) async fn set_lamp_rgb(
+    app: AppHandle,
+    device_id: String,
+    rgb: u32,
+) -> Result<LampState, String> {
+    if rgb > 0xFFFFFF {
+        return Err("Invalid RGB color".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = config::read(&app)?;
+        if !matches!(
+            store.device(&device_id)?.settings,
+            DeviceSettings::BedsideLamp(_) | DeviceSettings::ColorBulb(_)
+        ) {
+            return Err("RGB is only available for color lamps".into());
+        }
+        change(app, &device_id, "set_rgb", json!([rgb]))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
     use super::*;
@@ -398,6 +441,7 @@ mod tests {
             token: value["token"].as_str().unwrap().into(),
         };
         let before = read_state(&config).unwrap();
+        assert_eq!(device_model(&config).unwrap(), "yeelink.light.bslamp1");
         let current = if before.power { "on" } else { "off" };
         assert_eq!(
             send(&config, "set_power", json!([current])).unwrap(),

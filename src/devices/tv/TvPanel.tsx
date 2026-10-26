@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { invoke } from '@tauri-apps/api/core'
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bluetooth, CircleHelp,
-  Home, Info, ListVideo, Minus, Plus, Power, Settings2, Tv2,
+  Home, Info, ListVideo, Minus, Plus, Power, Settings2, Trash2,
   Volume2, VolumeX,
 } from 'lucide-react'
 import { useState } from 'react'
@@ -32,6 +32,11 @@ function Settings({ deviceId, initial, onSaved }: { deviceId: string; initial: T
     onSuccess: () => { setRootPrivateKey(''); toast.success('TV settings saved'); onSaved() },
     onError: error => toast.error(message(error)),
   })
+  const rename = useMutation({
+    mutationFn: () => invoke<TvConfig>('save_config', { deviceId, config: { ...initial, name: form.name.trim(), root_private_key: '' } }),
+    onSuccess: () => { toast.success('Device renamed'); onSaved() },
+    onError: error => toast.error(message(error)),
+  })
   const field = (key: ConfigField, label: string, placeholder: string) => (
     <label className="block space-y-2">
       <span className="text-xs font-medium text-[var(--foreground)]">{label}</span>
@@ -41,11 +46,15 @@ function Settings({ deviceId, initial, onSaved }: { deviceId: string; initial: T
   )
   return (
     <div className="panel space-y-5 p-5">
-      <div>
-        <h3 className="font-semibold">TV connection</h3>
-        <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">The SSH key is stored in Frog’s config and included when you export it.</p>
-      </div>
-      {field('name', 'Device name', 'Living room TV')}
+      <label className="block space-y-2">
+        <span className="text-xs font-medium text-[var(--foreground)]">Device name</span>
+        <div className="flex gap-2">
+          <input className="field min-w-0 flex-1 text-sm" value={form.name} placeholder="Living room TV"
+            onChange={event => setForm({ ...form, name: event.target.value })} />
+          <button className="soft-button px-3 text-sm" disabled={rename.isPending || !form.name.trim() || form.name.trim() === initial.name}
+            onClick={() => rename.mutate()}>Rename</button>
+        </div>
+      </label>
       {field('tv_ip', 'TV IP address', '192.168.31.89')}
       {field('tv_mac', 'TV MAC address', '20-28-BC-73-B2-7A')}
       {field('broadcast_ip', 'Wake broadcast address', '192.168.31.255')}
@@ -63,18 +72,21 @@ function Settings({ deviceId, initial, onSaved }: { deviceId: string; initial: T
   )
 }
 
-export default function TvPanel({ deviceId, name, onUpdated }: { deviceId: string; name: string; onUpdated: () => void }) {
+export default function TvPanel({ deviceId, onUpdated, onRemove, isRemoving }: {
+  deviceId: string; onUpdated: () => void; onRemove: () => void; isRemoving: boolean
+}) {
   const queryClient = useQueryClient()
-  const [tab, setTab] = useState<Tab>('audio')
+  const [tab, setTab] = useState<Tab>('remote')
   const [draft, setDraft] = useState<number | null>(null)
   const config = useQuery({ queryKey: ['tv-config', deviceId], queryFn: () => invoke<TvConfig>('get_config', { deviceId }) })
   const state = useQuery({
     queryKey: ['tv-state', deviceId], queryFn: () => invoke<AudioState>('get_state', { deviceId }),
+    enabled: config.data?.has_root_private_key === true && tab === 'audio',
     refetchInterval: tab === 'audio' ? 10000 : false,
   })
   const devices = useQuery({
     queryKey: ['tv-devices', deviceId], queryFn: () => invoke<Device[]>('get_paired_devices', { deviceId }),
-    enabled: tab === 'audio', refetchInterval: tab === 'audio' ? 15000 : false,
+    enabled: config.data?.has_root_private_key === true && tab === 'audio', refetchInterval: tab === 'audio' ? 15000 : false,
   })
   const action = useMutation({
     mutationFn: ({ command, args }: { command: string; args?: Record<string, unknown> }) =>
@@ -94,84 +106,71 @@ export default function TvPanel({ deviceId, name, onUpdated }: { deviceId: strin
 
   return (
     <div>
-      <div className="panel mb-4 flex items-center gap-3 px-4 py-3">
-        <div className="flex size-10 items-center justify-center rounded-xl bg-[var(--secondary)] text-[var(--foreground)]"><Tv2 size={20} /></div>
-        <div className="min-w-0 flex-1">
-          <div className="font-semibold">{name}</div>
-          <div className="mono text-[11px] text-[var(--muted-foreground)]">{config.data?.tv_ip ?? 'Connecting…'}</div>
-        </div>
-        <span className={`size-2.5 rounded-full ${state.isSuccess ? 'bg-[var(--foreground)]' : 'bg-[var(--muted-foreground)]'}`} />
-      </div>
-
-      <div className="mb-4 grid grid-cols-3 gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1.5">
+      <div className="mb-3 grid grid-cols-3 gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1.5">
         {(['audio', 'remote', 'settings'] as const).map(item => (
           <button key={item} className={`rounded-lg px-3 py-2 text-sm font-medium capitalize ${tab === item ? 'bg-[var(--secondary)] text-[var(--foreground)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'}`}
             onClick={() => setTab(item)}>{item}</button>
         ))}
       </div>
 
-      {tab === 'audio' && <div className="space-y-4">
-        <div className="panel p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <h2 className="font-semibold">Volume</h2>
-              <p className="text-xs text-[var(--muted-foreground)]">TV master volume</p>
-            </div>
-            <span className="mono text-4xl font-medium tabular-nums text-[var(--foreground)]">{state.data ? volume : '--'}<span className="ml-1 text-sm">%</span></span>
+      {tab === 'audio' && !config.data?.has_root_private_key && <p className="text-sm text-[var(--muted-foreground)]">Add a root SSH private key in Settings to use audio and Bluetooth controls.</p>}
+      {tab === 'audio' && config.data?.has_root_private_key && <div className="space-y-2">
+        <div className="panel p-4">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-sm">Volume</span>
+            <span className="mono text-2xl font-medium tabular-nums text-[var(--foreground)]">{state.data ? volume : '--'}<span className="ml-1 text-sm">%</span></span>
           </div>
-          <input aria-label="Volume" className="range mb-4" type="range" min="0" max="100" value={volume}
+          <input aria-label="Volume" className="range mb-2" type="range" min="0" max="100" value={volume}
             disabled={!state.data || action.isPending} onChange={event => setDraft(Number(event.target.value))}
             onPointerUp={() => { if (draft !== null) run('set_volume', { volume: draft }) }}
             onKeyUp={() => { if (draft !== null) run('set_volume', { volume: draft }) }} />
           <div className="grid grid-cols-2 gap-2">
-            <button className="soft-button flex items-center justify-center py-3" aria-label="Volume down" disabled={!state.data || action.isPending}
+            <button className="soft-button flex items-center justify-center py-2" aria-label="Volume down" disabled={!state.data || action.isPending}
               onClick={() => run('set_volume', { volume: Math.max(0, volume - 1) })}><Minus size={19} /></button>
-            <button className="soft-button flex items-center justify-center py-3" aria-label="Volume up" disabled={!state.data || action.isPending}
+            <button className="soft-button flex items-center justify-center py-2" aria-label="Volume up" disabled={!state.data || action.isPending}
               onClick={() => run('set_volume', { volume: Math.min(100, volume + 1) })}><Plus size={19} /></button>
           </div>
         </div>
-        <div className="panel p-5">
-          <h2 className="mb-4 font-semibold">Sound output</h2>
+        <div className="panel p-4">
           <div className="grid grid-cols-2 gap-2">
-            <button className={`soft-button flex min-h-20 flex-col items-start justify-center gap-1 px-4 text-left text-sm ${state.data?.sound_output === 'tv_speaker' ? 'active' : ''}`}
+            <button className={`soft-button flex min-h-14 items-center justify-center gap-2 px-2 text-center text-xs ${state.data?.sound_output === 'tv_speaker' ? 'active' : ''}`}
               disabled={action.isPending} onClick={() => run('set_output', { output: 'tv_speaker' })}>
-              <Volume2 size={20} /><span>TV speakers</span>
+              <Volume2 size={18} /><span>TV speakers</span>
             </button>
-            <button className={`soft-button flex min-h-20 flex-col items-start justify-center gap-1 px-4 text-left text-sm ${state.data?.sound_output === 'bt_soundbar' ? 'active' : ''}`}
+            <button className={`soft-button flex min-h-14 items-center justify-center gap-2 px-2 text-center text-xs ${state.data?.sound_output === 'bt_soundbar' ? 'active' : ''}`}
               disabled={action.isPending} onClick={() => run('connect_headphones')}>
-              <Bluetooth size={20} /><span className="truncate">{connectedHeadphones?.name ?? 'Bluetooth headphones'}</span>
+              <Bluetooth size={18} /><span className="truncate">{connectedHeadphones?.name ?? 'Bluetooth headphones'}</span>
             </button>
           </div>
-          <div className="mt-3 flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
+          <div className="mt-2 flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
             <span className={`size-1.5 rounded-full ${connectedHeadphones?.state ? 'bg-[var(--foreground)]' : 'bg-[var(--muted-foreground)]'}`} />
             {connectedHeadphones ? connectedHeadphones.state ? 'Headphones connected' : 'Headphones paired, ready to connect' : 'Checking paired headphones…'}
           </div>
         </div>
       </div>}
 
-      {tab === 'remote' && <div className="panel p-5">
-        <div className="mb-5 flex items-start justify-between">
-          <div><h2 className="font-semibold">Remote control</h2><p className="mt-1 text-xs text-[var(--muted-foreground)]">Manual buttons for the TV</p></div>
-          <button className="soft-button p-2.5 text-[var(--destructive)]" title="Power" aria-label="Power" onClick={() => send('POWER')}><Power size={19} /></button>
+      {tab === 'remote' && <div className="panel p-4">
+        <div className="mb-3 flex items-start justify-end">
+          <button className="soft-button p-2 text-[var(--destructive)]" title="Power" aria-label="Power" onClick={() => send('POWER')}><Power size={18} /></button>
         </div>
-        <div className="mb-5 grid grid-cols-3 gap-2">
+        <div className="mb-3 grid grid-cols-3 gap-1.5">
           <RemoteButton label="Home" icon={<Home size={18} />} onClick={() => send('HOME')} />
           <RemoteButton label="Inputs" icon={<ListVideo size={18} />} onClick={() => send('INPUT_HUB')} />
           <RemoteButton label="Settings" icon={<Settings2 size={18} />} onClick={() => send('MENU')} />
         </div>
-        <div className="mx-auto mb-5 grid w-52 grid-cols-3 gap-2">
+        <div className="mx-auto mb-3 grid w-44 grid-cols-3 gap-1.5">
           <span /><RemoteButton label="Up" icon={<ArrowUp size={21} />} onClick={() => send('UP')} /><span />
           <RemoteButton label="Left" icon={<ArrowLeft size={21} />} onClick={() => send('LEFT')} />
-          <button className="primary-button min-h-14" onClick={() => send('ENTER')}>OK</button>
+          <button className="primary-button min-h-10" onClick={() => send('ENTER')}>OK</button>
           <RemoteButton label="Right" icon={<ArrowRight size={21} />} onClick={() => send('RIGHT')} />
           <span /><RemoteButton label="Down" icon={<ArrowDown size={21} />} onClick={() => send('DOWN')} /><span />
         </div>
-        <div className="mb-5 grid grid-cols-3 gap-2">
+        <div className="mb-3 grid grid-cols-3 gap-1.5">
           <RemoteButton label="Back" onClick={() => send('BACK')} />
           <RemoteButton label="Exit" onClick={() => send('EXIT')} />
           <RemoteButton label="Info" icon={<Info size={18} />} onClick={() => send('INFO')} />
         </div>
-        <div className="grid grid-cols-2 gap-3 border-t border-[var(--border)] pt-5">
+        <div className="grid grid-cols-2 gap-2 border-t border-[var(--border)] pt-3">
           <div className="grid grid-cols-3 gap-1.5">
             <RemoteButton label="−" title="Volume down" onClick={() => send('VOLUMEDOWN')} />
             <RemoteButton label="Mute" title="Mute" icon={<VolumeX size={18} />} onClick={() => send('MUTE')} />
@@ -182,12 +181,12 @@ export default function TvPanel({ deviceId, name, onUpdated }: { deviceId: strin
             <RemoteButton label="Ch +" onClick={() => send('CHANNELUP')} />
           </div>
         </div>
-        <div className="mt-3 grid grid-cols-3 gap-2">
+        <div className="mt-2 grid grid-cols-3 gap-1.5">
           <RemoteButton label="Play" onClick={() => send('PLAY')} />
           <RemoteButton label="Pause" onClick={() => send('PAUSE')} />
           <RemoteButton label="Stop" onClick={() => send('STOP')} />
         </div>
-        <p className="mt-5 flex items-center gap-2 text-xs text-[var(--muted-foreground)]"><CircleHelp size={15} /> First press may show a one-time TV pairing prompt.</p>
+        <p className="mt-3 flex items-center gap-2 text-xs text-[var(--muted-foreground)]"><CircleHelp size={15} /> First press may show a TV pairing prompt.</p>
       </div>}
 
       {tab === 'settings' && config.data && <Settings deviceId={deviceId} initial={config.data} onSaved={() => {
@@ -197,14 +196,15 @@ export default function TvPanel({ deviceId, name, onUpdated }: { deviceId: strin
         onUpdated()
       }} />}
       {tab === 'settings' && config.error && <p className="text-sm text-[var(--destructive)]">{message(config.error)}</p>}
+      {tab === 'settings' && <button className="mt-4 flex items-center gap-2 text-xs text-[var(--destructive)]"
+        disabled={isRemoving} onClick={onRemove}><Trash2 size={15} /> Remove device</button>}
       {tab === 'audio' && state.error && <p className="flex items-center gap-2 text-sm text-[var(--destructive)]"><CircleHelp size={16} /> {message(state.error)}. Check Settings.</p>}
-      <div className="mt-5 flex justify-center gap-1 text-[11px] text-[var(--muted-foreground)]"><Tv2 size={13} /> LG webOS controller</div>
     </div>
   )
 }
 
 function RemoteButton({ label, title, icon, onClick }: { label: string; title?: string; icon?: React.ReactNode; onClick: () => void }) {
-  return <button title={title ?? label} aria-label={title ?? label} className="soft-button flex min-h-12 items-center justify-center gap-1 text-xs font-medium" onClick={onClick}>
+  return <button title={title ?? label} aria-label={title ?? label} className="soft-button flex min-h-10 items-center justify-center gap-1 text-xs font-medium" onClick={onClick}>
     {icon}{icon ? <span className="sr-only">{label}</span> : label}
   </button>
 }

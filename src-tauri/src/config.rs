@@ -1,4 +1,7 @@
-use crate::devices::{bedside_lamp::LampConfig, tv::TvConfig};
+use crate::{
+    cloud::{SavedXiaomiAccount, XiaomiAccountView},
+    devices::{bedside_lamp::LampConfig, tv::TvConfig},
+};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -14,13 +17,16 @@ const VERSION: u32 = 1;
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct AppConfig {
     version: u32,
-    devices: Vec<DeviceEntry>,
+    #[serde(default)]
+    pub(crate) xiaomi_accounts: Vec<SavedXiaomiAccount>,
+    pub(crate) devices: Vec<DeviceEntry>,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
             version: VERSION,
+            xiaomi_accounts: Vec::new(),
             devices: Vec::new(),
         }
     }
@@ -38,6 +44,7 @@ pub(crate) struct DeviceEntry {
 pub(crate) enum DeviceSettings {
     Tv(TvConfig),
     BedsideLamp(LampConfig),
+    ColorBulb(LampConfig),
 }
 
 #[derive(Serialize)]
@@ -54,6 +61,7 @@ impl From<&DeviceEntry> for DeviceSummary {
         let (device_type, address) = match &device.settings {
             DeviceSettings::Tv(settings) => ("tv", settings.tv_ip.clone()),
             DeviceSettings::BedsideLamp(settings) => ("bedside_lamp", settings.ip.clone()),
+            DeviceSettings::ColorBulb(settings) => ("color_bulb", settings.ip.clone()),
         };
         Self {
             id: device.id.clone(),
@@ -100,6 +108,16 @@ fn validate(config: &AppConfig) -> Result<(), String> {
         ));
     }
     let mut ids = std::collections::HashSet::new();
+    let mut accounts = std::collections::HashSet::new();
+    for account in &config.xiaomi_accounts {
+        if account.user_id.is_empty()
+            || !accounts.insert(&account.user_id)
+            || account.ssecurity.is_empty()
+            || account.service_token.is_empty()
+        {
+            return Err("Xiaomi account sessions must be complete and unique".into());
+        }
+    }
     for device in &config.devices {
         if Uuid::parse_str(&device.id).is_err() || !ids.insert(&device.id) {
             return Err("Device IDs must be unique UUIDs".into());
@@ -110,6 +128,7 @@ fn validate(config: &AppConfig) -> Result<(), String> {
         match &device.settings {
             DeviceSettings::Tv(settings) => settings.validate()?,
             DeviceSettings::BedsideLamp(settings) => settings.validate()?,
+            DeviceSettings::ColorBulb(settings) => settings.validate()?,
         }
     }
     Ok(())
@@ -171,9 +190,38 @@ pub(crate) fn tv(app: &AppHandle, id: &str) -> Result<TvConfig, String> {
 
 pub(crate) fn lamp(app: &AppHandle, id: &str) -> Result<LampConfig, String> {
     match &read(app)?.device(id)?.settings {
-        DeviceSettings::BedsideLamp(settings) => Ok(settings.clone()),
+        DeviceSettings::BedsideLamp(settings) | DeviceSettings::ColorBulb(settings) => {
+            Ok(settings.clone())
+        }
         _ => Err("Selected device is not a bedside lamp".into()),
     }
+}
+
+#[tauri::command]
+pub(crate) fn list_xiaomi_accounts(app: AppHandle) -> Result<Vec<XiaomiAccountView>, String> {
+    Ok(read(&app)?
+        .xiaomi_accounts
+        .iter()
+        .map(XiaomiAccountView::from)
+        .collect())
+}
+
+pub(crate) fn save_xiaomi_account(
+    app: &AppHandle,
+    account: SavedXiaomiAccount,
+) -> Result<(), String> {
+    update(app, |store| {
+        if let Some(existing) = store
+            .xiaomi_accounts
+            .iter_mut()
+            .find(|item| item.user_id == account.user_id)
+        {
+            *existing = account;
+        } else {
+            store.xiaomi_accounts.push(account);
+        }
+        Ok(())
+    })
 }
 
 #[tauri::command]
@@ -183,28 +231,6 @@ pub(crate) fn list_devices(app: AppHandle) -> Result<Vec<DeviceSummary>, String>
         .iter()
         .map(DeviceSummary::from)
         .collect())
-}
-
-#[tauri::command]
-pub(crate) fn add_device(app: AppHandle, device_type: String) -> Result<DeviceSummary, String> {
-    update(&app, |config| {
-        let (name, settings) = match device_type.as_str() {
-            "tv" => ("New TV", DeviceSettings::Tv(TvConfig::default())),
-            "bedside_lamp" => (
-                "New bedside lamp",
-                DeviceSettings::BedsideLamp(LampConfig::default()),
-            ),
-            _ => return Err("Unsupported device type".into()),
-        };
-        let device = DeviceEntry {
-            id: Uuid::new_v4().to_string(),
-            name: name.into(),
-            settings,
-        };
-        let summary = DeviceSummary::from(&device);
-        config.devices.push(device);
-        Ok(summary)
-    })
 }
 
 #[tauri::command]
@@ -316,6 +342,13 @@ mod tests {
         lamp.token = "0123456789abcdef0123456789abcdef".into();
         let config = AppConfig {
             version: VERSION,
+            xiaomi_accounts: vec![SavedXiaomiAccount {
+                username: "user@example.com".into(),
+                user_id: "12345".into(),
+                ssecurity: "session-security".into(),
+                service_token: "session-token".into(),
+                region: "ru".into(),
+            }],
             devices: vec![
                 DeviceEntry {
                     id: Uuid::new_v4().to_string(),
@@ -332,6 +365,7 @@ mod tests {
         let text = toml::to_string_pretty(&config).unwrap();
         let parsed = parse(&text).unwrap();
         assert_eq!(parsed.devices.len(), 2);
+        assert_eq!(parsed.xiaomi_accounts[0].service_token, "session-token");
         let DeviceSettings::Tv(tv) = &parsed.devices[0].settings else {
             panic!("TV changed type")
         };
@@ -349,6 +383,7 @@ mod tests {
         let id = Uuid::new_v4().to_string();
         let config = AppConfig {
             version: VERSION,
+            xiaomi_accounts: Vec::new(),
             devices: vec![
                 DeviceEntry {
                     id: id.clone(),
