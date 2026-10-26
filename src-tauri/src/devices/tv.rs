@@ -4,12 +4,13 @@ use std::{
     fs,
     io::Write,
     net::IpAddr,
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::{Command, Stdio},
     sync::Arc,
     time::Duration,
 };
 use tauri::{AppHandle, Manager, State};
+use crate::config::{self, DeviceSettings};
 use tauri_plugin_shell::{process::{CommandChild, CommandEvent}, ShellExt};
 use tokio::sync::{mpsc, Mutex};
 
@@ -21,27 +22,26 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct TvConfig {
-    tv_ip: String,
-    tv_mac: String,
-    broadcast_ip: String,
-    preferred_bluetooth_address: String,
-    root_key_path: String,
-    webos_client_key: String,
+    pub tv_ip: String,
+    pub tv_mac: String,
+    pub broadcast_ip: String,
+    pub preferred_bluetooth_address: String,
+    #[serde(default, skip_serializing)]
+    pub root_key_path: String,
+    #[serde(default)]
+    pub root_private_key: String,
+    pub webos_client_key: String,
 }
 
 impl Default for TvConfig {
     fn default() -> Self {
-        let dev_key = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tv/.tv_root_key");
         Self {
-            tv_ip: "192.168.31.89".into(),
-            tv_mac: "20-28-BC-73-B2-7A".into(),
-            broadcast_ip: "192.168.31.255".into(),
-            preferred_bluetooth_address: "80:99:e7:ff:d0:01".into(),
-            root_key_path: if cfg!(debug_assertions) && dev_key.exists() {
-                dev_key.to_string_lossy().into_owned()
-            } else {
-                String::new()
-            },
+            tv_ip: "0.0.0.0".into(),
+            tv_mac: "00:00:00:00:00:00".into(),
+            broadcast_ip: "255.255.255.255".into(),
+            preferred_bluetooth_address: "00:00:00:00:00:00".into(),
+            root_key_path: String::new(),
+            root_private_key: String::new(),
             webos_client_key: String::new(),
         }
     }
@@ -49,25 +49,37 @@ impl Default for TvConfig {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct ConfigView {
+    name: String,
     tv_ip: String,
     tv_mac: String,
     broadcast_ip: String,
     preferred_bluetooth_address: String,
-    root_key_path: String,
+    has_root_private_key: bool,
     has_webos_client_key: bool,
 }
 
-impl From<&TvConfig> for ConfigView {
-    fn from(config: &TvConfig) -> Self {
+impl ConfigView {
+    fn from_config(name: &str, config: &TvConfig) -> Self {
         Self {
+            name: name.into(),
             tv_ip: config.tv_ip.clone(),
             tv_mac: config.tv_mac.clone(),
             broadcast_ip: config.broadcast_ip.clone(),
             preferred_bluetooth_address: config.preferred_bluetooth_address.clone(),
-            root_key_path: config.root_key_path.clone(),
+            has_root_private_key: !config.root_private_key.is_empty(),
             has_webos_client_key: !config.webos_client_key.is_empty(),
         }
     }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ConfigInput {
+    name: String,
+    tv_ip: String,
+    tv_mac: String,
+    broadcast_ip: String,
+    preferred_bluetooth_address: String,
+    root_private_key: String,
 }
 
 #[derive(Serialize)]
@@ -92,38 +104,9 @@ fn app_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
-    if cfg!(debug_assertions) {
-        Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tv/settings.toml"))
-    } else {
-        Ok(app_dir(app)?.join("settings.toml"))
-    }
-}
-
-fn load_config(app: &AppHandle) -> Result<TvConfig, String> {
-    let path = config_path(app)?;
-    if !path.exists() {
-        let config = TvConfig::default();
-        save_config_file(app, &config)?;
-        return Ok(config);
-    }
-    let data = fs::read_to_string(path).map_err(|e| e.to_string())?;
-    toml::from_str(&data).map_err(|e| e.to_string())
-}
-
-fn save_config_file(app: &AppHandle, config: &TvConfig) -> Result<(), String> {
-    let data = toml::to_string_pretty(config).map_err(|e| e.to_string())?;
-    let path = config_path(app)?;
-    fs::write(&path, data).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-fn validate_config(config: &TvConfig) -> Result<(), String> {
+impl TvConfig {
+pub(crate) fn validate(&self) -> Result<(), String> {
+    let config = self;
     config.tv_ip.parse::<IpAddr>().map_err(|_| "TV address must be an IP address".to_string())?;
     config.broadcast_ip.parse::<IpAddr>().map_err(|_| "Broadcast address must be an IP address".to_string())?;
     if !valid_address(&config.tv_mac.replace('-', ":")) {
@@ -134,6 +117,7 @@ fn validate_config(config: &TvConfig) -> Result<(), String> {
     }
     Ok(())
 }
+}
 
 fn valid_address(address: &str) -> bool {
     let parts: Vec<_> = address.split(':').collect();
@@ -141,9 +125,23 @@ fn valid_address(address: &str) -> bool {
 }
 
 fn luna_call(app: &AppHandle, config: &TvConfig, service: &str, method: &str, payload: Value) -> Result<Value, String> {
-    let key = Path::new(&config.root_key_path);
-    if config.root_key_path.is_empty() || !key.is_file() {
-        return Err("Set the root SSH key path in Settings".into());
+    if config.root_private_key.is_empty() {
+        return Err("Add the root SSH private key in Settings".into());
+    }
+    let mut key = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
+    key.write_all(config.root_private_key.as_bytes()).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "windows")]
+    {
+        let identity = Command::new("whoami").output().map_err(|e| e.to_string())?;
+        if !identity.status.success() { return Err("Could not identify the current Windows user".into()); }
+        let user = String::from_utf8_lossy(&identity.stdout).trim().to_owned();
+        let permission = Command::new("icacls")
+            .arg(key.path())
+            .args(["/inheritance:r", "/grant:r", &format!("{user}:R")])
+            .output().map_err(|e| e.to_string())?;
+        if !permission.status.success() {
+            return Err(format!("Could not secure temporary SSH key: {}", String::from_utf8_lossy(&permission.stderr).trim()));
+        }
     }
     if !service.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.')
         || !method.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'/') {
@@ -152,7 +150,7 @@ fn luna_call(app: &AppHandle, config: &TvConfig, service: &str, method: &str, pa
     let known_hosts = app_dir(app)?.join("known_hosts");
     let mut command = Command::new("ssh");
     command.args([
-        "-i", &config.root_key_path,
+        "-i", &key.path().to_string_lossy(),
         "-o", "BatchMode=yes",
         "-o", "ConnectTimeout=5",
         "-o", "StrictHostKeyChecking=accept-new",
@@ -203,34 +201,42 @@ fn change_output(app: &AppHandle, config: &TvConfig, output: &str) -> Result<(),
 }
 
 #[tauri::command]
-pub(crate) fn get_config(app: AppHandle) -> Result<ConfigView, String> {
-    Ok(ConfigView::from(&load_config(&app)?))
+pub(crate) fn get_config(app: AppHandle, device_id: String) -> Result<ConfigView, String> {
+    let store = config::read(&app)?;
+    let device = store.device(&device_id)?;
+    match &device.settings {
+        DeviceSettings::Tv(settings) => Ok(ConfigView::from_config(&device.name, settings)),
+        _ => Err("Selected device is not a TV".into()),
+    }
 }
 
 #[tauri::command]
-pub(crate) fn save_config(app: AppHandle, config: ConfigView) -> Result<ConfigView, String> {
-    let mut stored = load_config(&app)?;
-    stored.tv_ip = config.tv_ip;
-    stored.tv_mac = config.tv_mac;
-    stored.broadcast_ip = config.broadcast_ip;
-    stored.preferred_bluetooth_address = config.preferred_bluetooth_address;
-    stored.root_key_path = config.root_key_path;
-    validate_config(&stored)?;
-    save_config_file(&app, &stored)?;
-    Ok(ConfigView::from(&stored))
+pub(crate) fn save_config(app: AppHandle, device_id: String, config: ConfigInput) -> Result<ConfigView, String> {
+    config::update(&app, |store| {
+        let device = store.device_mut(&device_id)?;
+        let DeviceSettings::Tv(stored) = &mut device.settings else { return Err("Selected device is not a TV".into()) };
+        device.name = config.name;
+        stored.tv_ip = config.tv_ip;
+        stored.tv_mac = config.tv_mac;
+        stored.broadcast_ip = config.broadcast_ip;
+        stored.preferred_bluetooth_address = config.preferred_bluetooth_address;
+        if !config.root_private_key.is_empty() { stored.root_private_key = config.root_private_key; }
+        stored.validate()?;
+        Ok(ConfigView::from_config(&device.name, stored))
+    })
 }
 
 #[tauri::command]
-pub(crate) async fn get_state(app: AppHandle) -> Result<AudioState, String> {
-    tauri::async_runtime::spawn_blocking(move || audio_state(&app, &load_config(&app)?))
+pub(crate) async fn get_state(app: AppHandle, device_id: String) -> Result<AudioState, String> {
+    tauri::async_runtime::spawn_blocking(move || audio_state(&app, &config::tv(&app, &device_id)?))
         .await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub(crate) async fn set_volume(app: AppHandle, volume: u8) -> Result<AudioState, String> {
+pub(crate) async fn set_volume(app: AppHandle, device_id: String, volume: u8) -> Result<AudioState, String> {
     if volume > 100 { return Err("Volume must be 0 to 100".into()); }
     tauri::async_runtime::spawn_blocking(move || {
-        let config = load_config(&app)?;
+        let config = config::tv(&app, &device_id)?;
         let output = audio_state(&app, &config)?.sound_output;
         luna_call(&app, &config, "com.webos.service.audio", "master/setVolume", json!({"soundOutput":output,"volume":volume}))?;
         audio_state(&app, &config)
@@ -238,24 +244,24 @@ pub(crate) async fn set_volume(app: AppHandle, volume: u8) -> Result<AudioState,
 }
 
 #[tauri::command]
-pub(crate) async fn set_output(app: AppHandle, output: String) -> Result<AudioState, String> {
+pub(crate) async fn set_output(app: AppHandle, device_id: String, output: String) -> Result<AudioState, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let config = load_config(&app)?;
+        let config = config::tv(&app, &device_id)?;
         change_output(&app, &config, &output)?;
         audio_state(&app, &config)
     }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub(crate) async fn get_paired_devices(app: AppHandle) -> Result<Vec<Value>, String> {
-    tauri::async_runtime::spawn_blocking(move || paired_devices(&app, &load_config(&app)?))
+pub(crate) async fn get_paired_devices(app: AppHandle, device_id: String) -> Result<Vec<Value>, String> {
+    tauri::async_runtime::spawn_blocking(move || paired_devices(&app, &config::tv(&app, &device_id)?))
         .await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub(crate) async fn connect_headphones(app: AppHandle) -> Result<AudioState, String> {
+pub(crate) async fn connect_headphones(app: AppHandle, device_id: String) -> Result<AudioState, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let config = load_config(&app)?;
+        let config = config::tv(&app, &device_id)?;
         let address = &config.preferred_bluetooth_address;
         if !paired_devices(&app, &config)?.iter().any(|device| device["address"].as_str()
             .is_some_and(|found| found.eq_ignore_ascii_case(address))) {
@@ -303,7 +309,7 @@ async fn start_remote(app: &AppHandle) -> Result<RemoteProcess, String> {
 }
 
 #[tauri::command]
-pub(crate) async fn remote_button(app: AppHandle, state: State<'_, AppState>, button: String) -> Result<(), String> {
+pub(crate) async fn remote_button(app: AppHandle, state: State<'_, AppState>, device_id: String, button: String) -> Result<(), String> {
     const BUTTONS: &[&str] = &["UP","DOWN","LEFT","RIGHT","ENTER","BACK","EXIT","HOME","MENU","POWER","INPUT_HUB",
         "MUTE","VOLUMEUP","VOLUMEDOWN","CHANNELUP","CHANNELDOWN","PLAY","PAUSE","STOP",
         "REWIND","FASTFORWARD","INFO","GUIDE","RED","GREEN","YELLOW","BLUE",
@@ -313,7 +319,7 @@ pub(crate) async fn remote_button(app: AppHandle, state: State<'_, AppState>, bu
     let mut guard = remote.lock().await;
     if guard.is_none() { *guard = Some(start_remote(&app).await?); }
     let process = guard.as_mut().ok_or("Remote process unavailable")?;
-    let config = load_config(&app)?;
+    let config = config::tv(&app, &device_id)?;
     let request = json!({"id":1,"action":"button","button":button,"tv_ip":config.tv_ip,
         "client_key":config.webos_client_key});
     process.child.write(format!("{}\n", request).as_bytes()).map_err(|e| e.to_string())?;
@@ -323,9 +329,12 @@ pub(crate) async fn remote_button(app: AppHandle, state: State<'_, AppState>, bu
     if response["ok"] != true { return Err(response["error"].as_str().unwrap_or("Remote command failed").into()); }
     if let Some(key) = response["client_key"].as_str() {
         if key != config.webos_client_key {
-            let mut updated = config;
-            updated.webos_client_key = key.to_owned();
-            save_config_file(&app, &updated)?;
+            config::update(&app, |store| {
+                let device = store.device_mut(&device_id)?;
+                let DeviceSettings::Tv(settings) = &mut device.settings else { return Err("Selected device is not a TV".into()) };
+                settings.webos_client_key = key.to_owned();
+                Ok(())
+            })?;
         }
     }
     Ok(())

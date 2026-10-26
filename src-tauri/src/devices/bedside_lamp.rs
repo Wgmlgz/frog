@@ -1,3 +1,4 @@
+use crate::config::{self, DeviceSettings};
 use aes::Aes128;
 use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use md5::{Digest, Md5};
@@ -13,24 +14,24 @@ use std::{
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 const MIIO_PORT: u16 = 54321;
 const LAMP_DEVICE_ID: u32 = 75_416_834;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default)]
-struct LampConfig {
-    ip: String,
-    device_id: u32,
-    token: String,
+pub(crate) struct LampConfig {
+    pub ip: String,
+    pub device_id: u32,
+    pub token: String,
 }
 
 impl Default for LampConfig {
     fn default() -> Self {
         Self {
-            ip: "192.168.31.237".into(),
-            device_id: LAMP_DEVICE_ID,
+            ip: "0.0.0.0".into(),
+            device_id: 0,
             token: String::new(),
         }
     }
@@ -38,14 +39,16 @@ impl Default for LampConfig {
 
 #[derive(Serialize)]
 pub(crate) struct LampConfigView {
+    name: String,
     ip: String,
     device_id: u32,
     has_token: bool,
 }
 
-impl From<&LampConfig> for LampConfigView {
-    fn from(config: &LampConfig) -> Self {
+impl LampConfigView {
+    fn from_config(name: &str, config: &LampConfig) -> Self {
         Self {
+            name: name.into(),
             ip: config.ip.clone(),
             device_id: config.device_id,
             has_token: !config.token.is_empty(),
@@ -55,7 +58,9 @@ impl From<&LampConfig> for LampConfigView {
 
 #[derive(Deserialize)]
 pub(crate) struct LampConfigInput {
+    name: String,
     ip: String,
+    device_id: u32,
     token: String,
 }
 
@@ -66,67 +71,59 @@ pub(crate) struct LampState {
     temperature: u16,
 }
 
-fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    Ok(dir.join("bedside_lamp.toml"))
+impl LampConfig {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        self.ip
+            .parse::<Ipv4Addr>()
+            .map_err(|_| "Lamp address must be an IPv4 address")?;
+        if !self.token.is_empty() && !valid_token(&self.token) {
+            return Err("Lamp token must be 32 hexadecimal characters".into());
+        }
+        Ok(())
+    }
+
+    // Import the token obtained during local setup. It stays in app data, never in the repository.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn import_existing_token() -> Option<Self> {
+        let mut config = Self::default();
+        let Some(local) = std::env::var_os("LOCALAPPDATA") else {
+            return None;
+        };
+        let path = PathBuf::from(local)
+            .join("BedsideLampLocal")
+            .join("token.json");
+        let Ok(contents) = fs::read_to_string(path) else {
+            return None;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&contents) else {
+            return None;
+        };
+        if value["device_id"].as_str() != Some("75416834") {
+            return None;
+        }
+        config.device_id = LAMP_DEVICE_ID;
+        if let Some(token) = value["token"].as_str().filter(|token| valid_token(token)) {
+            config.token = token.to_owned();
+        }
+        if let Some(ip) = value["ip"]
+            .as_str()
+            .filter(|ip| ip.parse::<Ipv4Addr>().is_ok())
+        {
+            config.ip = ip.to_owned();
+        }
+        if config.token.is_empty() {
+            None
+        } else {
+            Some(config)
+        }
+    }
 }
 
-fn save_config_file(app: &AppHandle, config: &LampConfig) -> Result<(), String> {
-    let path = config_path(app)?;
-    fs::write(
-        &path,
-        toml::to_string_pretty(config).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
+#[cfg(not(target_os = "windows"))]
+impl LampConfig {
+    pub(crate) fn import_existing_token() -> Option<Self> {
+        None
     }
-    Ok(())
-}
-
-// Import the token obtained during local setup. It stays in app data, never in the repository.
-#[cfg(target_os = "windows")]
-fn import_existing_token(config: &mut LampConfig) {
-    let Some(local) = std::env::var_os("LOCALAPPDATA") else {
-        return;
-    };
-    let path = PathBuf::from(local)
-        .join("BedsideLampLocal")
-        .join("token.json");
-    let Ok(contents) = fs::read_to_string(path) else {
-        return;
-    };
-    let Ok(value) = serde_json::from_str::<Value>(&contents) else {
-        return;
-    };
-    if value["device_id"].as_str() != Some("75416834") {
-        return;
-    }
-    if let Some(token) = value["token"].as_str().filter(|token| valid_token(token)) {
-        config.token = token.to_owned();
-    }
-    if let Some(ip) = value["ip"]
-        .as_str()
-        .filter(|ip| ip.parse::<Ipv4Addr>().is_ok())
-    {
-        config.ip = ip.to_owned();
-    }
-}
-
-fn load_config(app: &AppHandle) -> Result<LampConfig, String> {
-    let path = config_path(app)?;
-    if !path.exists() {
-        let mut config = LampConfig::default();
-        #[cfg(target_os = "windows")]
-        import_existing_token(&mut config);
-        save_config_file(app, &config)?;
-        return Ok(config);
-    }
-    toml::from_str(&fs::read_to_string(path).map_err(|e| e.to_string())?)
-        .map_err(|e| format!("Invalid bedside lamp settings: {e}"))
 }
 
 fn valid_token(token: &str) -> bool {
@@ -271,8 +268,13 @@ fn read_state(config: &LampConfig) -> Result<LampState, String> {
     })
 }
 
-fn change(app: AppHandle, method: &str, params: Value) -> Result<LampState, String> {
-    let config = load_config(&app)?;
+fn change(
+    app: AppHandle,
+    device_id: &str,
+    method: &str,
+    params: Value,
+) -> Result<LampState, String> {
+    let config = config::lamp(&app, device_id)?;
     let result = send(&config, method, params)?;
     if !result
         .as_array()
@@ -284,42 +286,59 @@ fn change(app: AppHandle, method: &str, params: Value) -> Result<LampState, Stri
 }
 
 #[tauri::command]
-pub(crate) fn get_lamp_config(app: AppHandle) -> Result<LampConfigView, String> {
-    Ok(LampConfigView::from(&load_config(&app)?))
+pub(crate) fn get_lamp_config(app: AppHandle, device_id: String) -> Result<LampConfigView, String> {
+    let store = config::read(&app)?;
+    let device = store.device(&device_id)?;
+    match &device.settings {
+        DeviceSettings::BedsideLamp(settings) => {
+            Ok(LampConfigView::from_config(&device.name, settings))
+        }
+        _ => Err("Selected device is not a bedside lamp".into()),
+    }
 }
 
 #[tauri::command]
 pub(crate) fn save_lamp_config(
     app: AppHandle,
+    device_id: String,
     config: LampConfigInput,
 ) -> Result<LampConfigView, String> {
-    let mut stored = load_config(&app)?;
-    config
-        .ip
-        .parse::<Ipv4Addr>()
-        .map_err(|_| "Lamp address must be an IPv4 address")?;
-    stored.ip = config.ip;
-    if !config.token.is_empty() {
-        if !valid_token(&config.token) {
-            return Err("Lamp token must be 32 hexadecimal characters".into());
+    config::update(&app, |store| {
+        let device = store.device_mut(&device_id)?;
+        let DeviceSettings::BedsideLamp(stored) = &mut device.settings else {
+            return Err("Selected device is not a bedside lamp".into());
+        };
+        device.name = config.name;
+        stored.ip = config.ip;
+        stored.device_id = config.device_id;
+        if !config.token.is_empty() {
+            stored.token = config.token;
         }
-        stored.token = config.token;
-    }
-    save_config_file(&app, &stored)?;
-    Ok(LampConfigView::from(&stored))
+        stored.validate()?;
+        Ok(LampConfigView::from_config(&device.name, stored))
+    })
 }
 
 #[tauri::command]
-pub(crate) async fn get_lamp_state(app: AppHandle) -> Result<LampState, String> {
-    tauri::async_runtime::spawn_blocking(move || read_state(&load_config(&app)?))
+pub(crate) async fn get_lamp_state(app: AppHandle, device_id: String) -> Result<LampState, String> {
+    tauri::async_runtime::spawn_blocking(move || read_state(&config::lamp(&app, &device_id)?))
         .await
         .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub(crate) async fn set_lamp_power(app: AppHandle, on: bool) -> Result<LampState, String> {
+pub(crate) async fn set_lamp_power(
+    app: AppHandle,
+    device_id: String,
+    on: bool,
+) -> Result<LampState, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        change(app, "set_power", json!([if on { "on" } else { "off" }]))
+        change(
+            app,
+            &device_id,
+            "set_power",
+            json!([if on { "on" } else { "off" }]),
+        )
     })
     .await
     .map_err(|e| e.to_string())?
@@ -328,26 +347,35 @@ pub(crate) async fn set_lamp_power(app: AppHandle, on: bool) -> Result<LampState
 #[tauri::command]
 pub(crate) async fn set_lamp_brightness(
     app: AppHandle,
+    device_id: String,
     brightness: u8,
 ) -> Result<LampState, String> {
     if !(1..=100).contains(&brightness) {
         return Err("Brightness must be 1 to 100".into());
     }
-    tauri::async_runtime::spawn_blocking(move || change(app, "set_bright", json!([brightness])))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        change(app, &device_id, "set_bright", json!([brightness]))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub(crate) async fn set_lamp_temperature(
     app: AppHandle,
+    device_id: String,
     temperature: u16,
 ) -> Result<LampState, String> {
     if !(1700..=6500).contains(&temperature) {
         return Err("Color temperature must be 1700 to 6500 K".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        change(app, "set_ct_abx", json!([temperature, "smooth", 500]))
+        change(
+            app,
+            &device_id,
+            "set_ct_abx",
+            json!([temperature, "smooth", 500]),
+        )
     })
     .await
     .map_err(|e| e.to_string())?

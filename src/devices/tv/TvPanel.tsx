@@ -9,25 +9,27 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 
 type TvConfig = {
+  name: string
   tv_ip: string
   tv_mac: string
   broadcast_ip: string
   preferred_bluetooth_address: string
-  root_key_path: string
+  has_root_private_key: boolean
   has_webos_client_key: boolean
 }
-type ConfigField = 'tv_ip' | 'tv_mac' | 'broadcast_ip' | 'preferred_bluetooth_address' | 'root_key_path'
+type ConfigField = 'name' | 'tv_ip' | 'tv_mac' | 'broadcast_ip' | 'preferred_bluetooth_address'
 type AudioState = { volume: number; sound_output: string }
 type Device = { name: string; address: string; state: boolean }
 type Tab = 'audio' | 'remote' | 'settings'
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error)
 
-function Settings({ initial, onSaved }: { initial: TvConfig; onSaved: () => void }) {
+function Settings({ deviceId, initial, onSaved }: { deviceId: string; initial: TvConfig; onSaved: () => void }) {
   const [form, setForm] = useState(initial)
+  const [rootPrivateKey, setRootPrivateKey] = useState('')
   const save = useMutation({
-    mutationFn: () => invoke<TvConfig>('save_config', { config: form }),
-    onSuccess: () => { toast.success('TV settings saved'); onSaved() },
+    mutationFn: () => invoke<TvConfig>('save_config', { deviceId, config: { ...form, root_private_key: rootPrivateKey } }),
+    onSuccess: () => { setRootPrivateKey(''); toast.success('TV settings saved'); onSaved() },
     onError: error => toast.error(message(error)),
   })
   const field = (key: ConfigField, label: string, placeholder: string) => (
@@ -41,41 +43,47 @@ function Settings({ initial, onSaved }: { initial: TvConfig; onSaved: () => void
     <div className="panel space-y-5 p-5">
       <div>
         <h3 className="font-semibold">TV connection</h3>
-        <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">The SSH key stays on this computer. It is never bundled into app releases.</p>
+        <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">The SSH key is stored in Frog’s config and included when you export it.</p>
       </div>
+      {field('name', 'Device name', 'Living room TV')}
       {field('tv_ip', 'TV IP address', '192.168.31.89')}
       {field('tv_mac', 'TV MAC address', '20-28-BC-73-B2-7A')}
       {field('broadcast_ip', 'Wake broadcast address', '192.168.31.255')}
       {field('preferred_bluetooth_address', 'Headphones Bluetooth address', 'AA:BB:CC:DD:EE:FF')}
-      {field('root_key_path', 'Root SSH private key path', 'Path to .tv_root_key')}
+      <label className="block space-y-2">
+        <span className="text-xs font-medium">Root SSH private key</span>
+        <textarea className="field mono min-h-24 text-xs" value={rootPrivateKey}
+          placeholder={initial.has_root_private_key ? 'Saved — leave blank to keep it' : 'Paste the OpenSSH private key'}
+          onChange={event => setRootPrivateKey(event.target.value)} />
+      </label>
       <button className="primary-button w-full px-4 py-3 text-sm" disabled={save.isPending}
         onClick={() => save.mutate()}>Save settings</button>
-      <p className="text-xs leading-5 text-[var(--muted-foreground)]">The webOS pairing key is {initial.has_webos_client_key ? 'saved' : 'not yet saved'} in settings.toml. On first remote use, accept the TV pairing prompt once.</p>
+      <p className="text-xs leading-5 text-[var(--muted-foreground)]">The webOS pairing key is {initial.has_webos_client_key ? 'saved' : 'not yet saved'}. On first remote use, accept the TV pairing prompt once.</p>
     </div>
   )
 }
 
-export default function TvPanel() {
+export default function TvPanel({ deviceId, name, onUpdated }: { deviceId: string; name: string; onUpdated: () => void }) {
   const queryClient = useQueryClient()
   const [tab, setTab] = useState<Tab>('audio')
   const [draft, setDraft] = useState<number | null>(null)
-  const config = useQuery({ queryKey: ['tv-config'], queryFn: () => invoke<TvConfig>('get_config') })
+  const config = useQuery({ queryKey: ['tv-config', deviceId], queryFn: () => invoke<TvConfig>('get_config', { deviceId }) })
   const state = useQuery({
-    queryKey: ['tv-state'], queryFn: () => invoke<AudioState>('get_state'),
+    queryKey: ['tv-state', deviceId], queryFn: () => invoke<AudioState>('get_state', { deviceId }),
     refetchInterval: tab === 'audio' ? 10000 : false,
   })
   const devices = useQuery({
-    queryKey: ['tv-devices'], queryFn: () => invoke<Device[]>('get_paired_devices'),
+    queryKey: ['tv-devices', deviceId], queryFn: () => invoke<Device[]>('get_paired_devices', { deviceId }),
     enabled: tab === 'audio', refetchInterval: tab === 'audio' ? 15000 : false,
   })
   const action = useMutation({
     mutationFn: ({ command, args }: { command: string; args?: Record<string, unknown> }) =>
-      invoke<AudioState>(command, args),
-    onSuccess: data => { queryClient.setQueryData(['tv-state'], data); setDraft(null) },
+      invoke<AudioState>(command, { deviceId, ...args }),
+    onSuccess: data => { queryClient.setQueryData(['tv-state', deviceId], data); setDraft(null) },
     onError: error => toast.error(message(error)),
   })
   const remote = useMutation({
-    mutationFn: (button: string) => invoke<void>('remote_button', { button }),
+    mutationFn: (button: string) => invoke<void>('remote_button', { deviceId, button }),
     onError: error => toast.error(message(error)),
   })
   const run = (command: string, args?: Record<string, unknown>) => action.mutate({ command, args })
@@ -89,7 +97,7 @@ export default function TvPanel() {
       <div className="panel mb-4 flex items-center gap-3 px-4 py-3">
         <div className="flex size-10 items-center justify-center rounded-xl bg-[var(--secondary)] text-[var(--foreground)]"><Tv2 size={20} /></div>
         <div className="min-w-0 flex-1">
-          <div className="font-semibold">LG OLED42C21LA</div>
+          <div className="font-semibold">{name}</div>
           <div className="mono text-[11px] text-[var(--muted-foreground)]">{config.data?.tv_ip ?? 'Connecting…'}</div>
         </div>
         <span className={`size-2.5 rounded-full ${state.isSuccess ? 'bg-[var(--foreground)]' : 'bg-[var(--muted-foreground)]'}`} />
@@ -182,10 +190,11 @@ export default function TvPanel() {
         <p className="mt-5 flex items-center gap-2 text-xs text-[var(--muted-foreground)]"><CircleHelp size={15} /> First press may show a one-time TV pairing prompt.</p>
       </div>}
 
-      {tab === 'settings' && config.data && <Settings initial={config.data} onSaved={() => {
-        void queryClient.invalidateQueries({ queryKey: ['tv-config'] })
-        void queryClient.invalidateQueries({ queryKey: ['tv-state'] })
-        void queryClient.invalidateQueries({ queryKey: ['tv-devices'] })
+      {tab === 'settings' && config.data && <Settings deviceId={deviceId} initial={config.data} onSaved={() => {
+        void queryClient.invalidateQueries({ queryKey: ['tv-config', deviceId] })
+        void queryClient.invalidateQueries({ queryKey: ['tv-state', deviceId] })
+        void queryClient.invalidateQueries({ queryKey: ['tv-devices', deviceId] })
+        onUpdated()
       }} />}
       {tab === 'settings' && config.error && <p className="text-sm text-[var(--destructive)]">{message(config.error)}</p>}
       {tab === 'audio' && state.error && <p className="flex items-center gap-2 text-sm text-[var(--destructive)]"><CircleHelp size={16} /> {message(state.error)}. Check Settings.</p>}

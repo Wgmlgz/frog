@@ -22,7 +22,7 @@ python tv.py serve
 
 Open <http://127.0.0.1:8765/>. The server listens on this computer only. Stop it with Ctrl+C. The page requires root SSH access set up below.
 
-The general CLI commands use webOS's normal network control API. On the first connection from a new computer, accept the pairing prompt on the TV. The legacy CLI stores its client key in `tv/.aiopylgtv.sqlite`, which Git ignores. The Tauri app keeps its webOS pairing key and TV configuration in the ignored `tv/settings.toml` during development or in the OS app data directory after installation. Copy `settings.example.toml` to `settings.toml` for a new TV. Keep the TOML and SSH private key files private.
+The general CLI commands use webOS's normal network control API. On the first connection from a new computer, accept the pairing prompt on the TV. The legacy CLI stores its client key in `tv/.aiopylgtv.sqlite`, which Git ignores. Frog keeps each TV's settings, pairing key, and SSH private key in the shared `frog.toml` in the OS app data directory. Existing `tv/settings.toml` and `tv/.tv_root_key` files are imported on first run. Keep these files private.
 
 ## One-time root setup
 

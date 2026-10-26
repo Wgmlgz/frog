@@ -4,7 +4,7 @@ import { Lightbulb, Power, RefreshCw, Settings2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 
-type LampConfig = { ip: string; device_id: number; has_token: boolean }
+type LampConfig = { name: string; ip: string; device_id: number; has_token: boolean }
 type LampState = { power: boolean; brightness: number; temperature: number }
 type LampCommand =
   | { name: 'set_lamp_power'; args: { on: boolean } }
@@ -13,11 +13,13 @@ type LampCommand =
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error)
 
-function LampSettings({ config, onSaved }: { config: LampConfig; onSaved: () => void }) {
+function LampSettings({ deviceId, config, onSaved }: { deviceId: string; config: LampConfig; onSaved: () => void }) {
+  const [name, setName] = useState(config.name)
   const [ip, setIp] = useState(config.ip)
+  const [lampDeviceId, setLampDeviceId] = useState(String(config.device_id || ''))
   const [token, setToken] = useState('')
   const save = useMutation({
-    mutationFn: () => invoke<LampConfig>('save_lamp_config', { config: { ip, token } }),
+    mutationFn: () => invoke<LampConfig>('save_lamp_config', { deviceId, config: { name, ip, device_id: Number(lampDeviceId), token } }),
     onSuccess: () => { setToken(''); toast.success('Lamp settings saved'); onSaved() },
     onError: error => toast.error(message(error)),
   })
@@ -26,12 +28,21 @@ function LampSettings({ config, onSaved }: { config: LampConfig; onSaved: () => 
     <div>
       <h3 className="font-semibold">Bedside lamp connection</h3>
       <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">
-        Direct local connection over Xiaomi miIO. Device ID {config.device_id}.
+        Direct local connection over Xiaomi miIO.
       </p>
     </div>
     <label className="block space-y-2">
+      <span className="text-xs font-medium">Device name</span>
+      <input className="field text-sm" value={name} onChange={event => setName(event.target.value)} />
+    </label>
+    <label className="block space-y-2">
       <span className="text-xs font-medium">IP address</span>
       <input className="field mono text-sm" value={ip} onChange={event => setIp(event.target.value)} />
+    </label>
+    <label className="block space-y-2">
+      <span className="text-xs font-medium">Xiaomi device ID</span>
+      <input className="field mono text-sm" inputMode="numeric" value={lampDeviceId}
+        onChange={event => setLampDeviceId(event.target.value)} />
     </label>
     <label className="block space-y-2">
       <span className="text-xs font-medium">Device token</span>
@@ -42,25 +53,25 @@ function LampSettings({ config, onSaved }: { config: LampConfig; onSaved: () => 
     <button className="primary-button w-full px-4 py-3 text-sm" disabled={save.isPending}
       onClick={() => save.mutate()}>Save lamp settings</button>
     <p className="text-xs leading-5 text-[var(--muted-foreground)]">
-      The token stays in this computer’s app data and is never included in app builds.
+      The token is stored in Frog’s config and included when you export it.
     </p>
   </div>
 }
 
-export default function BedsideLampPanel() {
+export default function BedsideLampPanel({ deviceId, name, onUpdated }: { deviceId: string; name: string; onUpdated: () => void }) {
   const queryClient = useQueryClient()
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [brightnessDraft, setBrightnessDraft] = useState<number | null>(null)
   const [temperatureDraft, setTemperatureDraft] = useState<number | null>(null)
-  const config = useQuery({ queryKey: ['lamp-config'], queryFn: () => invoke<LampConfig>('get_lamp_config') })
+  const config = useQuery({ queryKey: ['lamp-config', deviceId], queryFn: () => invoke<LampConfig>('get_lamp_config', { deviceId }) })
   const state = useQuery({
-    queryKey: ['lamp-state'], queryFn: () => invoke<LampState>('get_lamp_state'),
+    queryKey: ['lamp-state', deviceId], queryFn: () => invoke<LampState>('get_lamp_state', { deviceId }),
     enabled: config.data?.has_token === true, refetchInterval: 10000,
   })
   const action = useMutation({
-    mutationFn: (command: LampCommand) => invoke<LampState>(command.name, command.args),
+    mutationFn: (command: LampCommand) => invoke<LampState>(command.name, { deviceId, ...command.args }),
     onSuccess: data => {
-      queryClient.setQueryData(['lamp-state'], data)
+      queryClient.setQueryData(['lamp-state', deviceId], data)
       setBrightnessDraft(null)
       setTemperatureDraft(null)
     },
@@ -75,7 +86,7 @@ export default function BedsideLampPanel() {
       <div className="mb-5 flex items-center gap-3">
         <div className="flex size-10 items-center justify-center rounded-xl bg-[var(--secondary)]"><Lightbulb size={20} /></div>
         <div className="min-w-0 flex-1">
-          <h2 className="font-semibold">Mi Bedside Lamp</h2>
+          <h2 className="font-semibold">{name}</h2>
           <p className="mono text-[11px] text-[var(--muted-foreground)]">{config.data?.ip ?? 'Connecting…'}</p>
         </div>
         <button className="soft-button p-2.5" title="Refresh lamp" aria-label="Refresh lamp"
@@ -120,9 +131,10 @@ export default function BedsideLampPanel() {
         </div>
       </div>
     </div>
-    {settingsOpen && config.data && <LampSettings config={config.data} onSaved={() => {
-      void queryClient.invalidateQueries({ queryKey: ['lamp-config'] })
-      void queryClient.invalidateQueries({ queryKey: ['lamp-state'] })
+    {settingsOpen && config.data && <LampSettings deviceId={deviceId} config={config.data} onSaved={() => {
+      void queryClient.invalidateQueries({ queryKey: ['lamp-config', deviceId] })
+      void queryClient.invalidateQueries({ queryKey: ['lamp-state', deviceId] })
+      onUpdated()
       setSettingsOpen(false)
     }} />}
   </section>
