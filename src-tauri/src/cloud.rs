@@ -9,7 +9,7 @@ use reqwest::{
     redirect::Policy,
     Url,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha1::Sha1;
 use sha2::Sha256;
@@ -47,6 +47,32 @@ pub(crate) enum LoginStep {
     Captcha { image: String, wrong: bool },
     EmailCode,
     Ready { devices: Vec<CloudDeviceView> },
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct SavedXiaomiAccount {
+    pub username: String,
+    pub user_id: String,
+    pub ssecurity: String,
+    pub service_token: String,
+    pub region: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct XiaomiAccountView {
+    user_id: String,
+    username: String,
+    region: String,
+}
+
+impl From<&SavedXiaomiAccount> for XiaomiAccountView {
+    fn from(account: &SavedXiaomiAccount) -> Self {
+        Self {
+            user_id: account.user_id.clone(),
+            username: account.username.clone(),
+            region: account.region.clone(),
+        }
+    }
 }
 
 pub(crate) struct CloudSession {
@@ -117,6 +143,42 @@ fn string(value: &Value) -> String {
 }
 
 impl CloudSession {
+    pub fn from_saved(account: &SavedXiaomiAccount) -> Result<Self, String> {
+        if account.user_id.is_empty()
+            || account.ssecurity.is_empty()
+            || account.service_token.is_empty()
+        {
+            return Err("Saved Xiaomi session is incomplete".into());
+        }
+        let mut session = Self::new(
+            account.username.clone(),
+            String::from("saved-session"),
+            account.region.clone(),
+        )?;
+        session.password.clear();
+        session.user_id = account.user_id.clone();
+        session.ssecurity = account.ssecurity.clone();
+        session.service_token = account.service_token.clone();
+        Ok(session)
+    }
+
+    pub fn saved_account(&self) -> Option<SavedXiaomiAccount> {
+        if self.user_id.is_empty() || self.ssecurity.is_empty() || self.service_token.is_empty() {
+            return None;
+        }
+        Some(SavedXiaomiAccount {
+            username: self.username.clone(),
+            user_id: self.user_id.clone(),
+            ssecurity: self.ssecurity.clone(),
+            service_token: self.service_token.clone(),
+            region: self.region.clone(),
+        })
+    }
+
+    pub fn refresh(&mut self) -> Result<LoginStep, String> {
+        self.ready()
+    }
+
     pub fn new(username: String, password: String, region: String) -> Result<Self, String> {
         if username.trim().is_empty() || password.is_empty() {
             return Err("Enter your Xiaomi account and password".into());

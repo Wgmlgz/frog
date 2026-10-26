@@ -24,7 +24,7 @@ Clone with submodules:
 git clone --recurse-submodules <repository-url>
 ```
 
-Install prerequisites: Node.js 22+, Rust, Python 3.12+, and OpenSSH client. For a development build:
+Install prerequisites: Node.js 22+, Rust, and Python 3.12+. The TV SSH connection uses an embedded Rust client, so no system OpenSSH client is needed. For a development build:
 
 ```text
 python -m venv tv/.venv

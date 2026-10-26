@@ -2,22 +2,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     fs,
-    io::Write,
     net::IpAddr,
     path::PathBuf,
-    process::{Command, Stdio},
     sync::Arc,
     time::Duration,
 };
+use russh::{client, keys::{self, PublicKeyOrCertificate}, ChannelMsg};
 use tauri::{AppHandle, Manager, State};
 use crate::config::{self, DeviceSettings};
 use tauri_plugin_shell::{process::{CommandChild, CommandEvent}, ShellExt};
 use tokio::sync::{mpsc, Mutex};
-
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
-#[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -124,54 +118,84 @@ fn valid_address(address: &str) -> bool {
     parts.len() == 6 && parts.iter().all(|part| part.len() == 2 && part.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
+struct TvHostKey {
+    address: String,
+    known_hosts: PathBuf,
+}
+
+impl client::Handler for TvHostKey {
+    type Error = anyhow::Error;
+
+    async fn check_server_key(&mut self, server_key: &PublicKeyOrCertificate) -> Result<bool, Self::Error> {
+        let PublicKeyOrCertificate::PublicKey { key, .. } = server_key else {
+            return Ok(false);
+        };
+        if keys::known_hosts::check_known_hosts_path(&self.address, 22, key, &self.known_hosts)? {
+            return Ok(true);
+        }
+        // Match the previous OpenSSH StrictHostKeyChecking=accept-new behavior.
+        keys::known_hosts::learn_known_hosts_path(&self.address, 22, key, &self.known_hosts)?;
+        Ok(true)
+    }
+}
+
+async fn run_tv_script(address: &str, private_key: &str, known_hosts: PathBuf, script: String) -> Result<Vec<u8>, String> {
+    let key = keys::decode_secret_key(private_key, None).map_err(|e| format!("Invalid TV SSH key: {e}"))?;
+    let handler = TvHostKey { address: address.to_owned(), known_hosts };
+    let connection = client::connect(Arc::new(client::Config::default()), (address, 22), handler);
+    let mut session = tokio::time::timeout(Duration::from_secs(5), connection)
+        .await.map_err(|_| "TV SSH connection timed out".to_string())?
+        .map_err(|e| format!("TV SSH connection failed: {e}"))?;
+    let result = tokio::time::timeout(Duration::from_secs(20), async {
+        let auth = session.authenticate_publickey(
+            "root",
+            keys::PrivateKeyWithHashAlg::new(
+                Arc::new(key),
+                session.best_supported_rsa_hash().await.map_err(|e| e.to_string())?.flatten(),
+            ),
+        ).await.map_err(|e| e.to_string())?;
+        if !auth.success() { return Err("TV SSH key was rejected".to_string()); }
+        let mut channel = session.channel_open_session().await.map_err(|e| e.to_string())?;
+        channel.exec(true, "sh -s").await.map_err(|e| e.to_string())?;
+        channel.data(script.as_bytes()).await.map_err(|e| e.to_string())?;
+        channel.eof().await.map_err(|e| e.to_string())?;
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut status = None;
+        while let Some(message) = channel.wait().await {
+            match message {
+                ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
+                ChannelMsg::ExtendedData { data, .. } => stderr.extend_from_slice(&data),
+                ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
+                _ => {}
+            }
+        }
+        if status != Some(0) || stdout.is_empty() {
+            let error = String::from_utf8_lossy(&stderr).trim().to_owned();
+            return Err(if error.is_empty() { "TV did not answer the SSH command".into() } else { error });
+        }
+        Ok(stdout)
+    }).await.map_err(|_| "TV SSH command timed out".to_string())?;
+    let _ = session.disconnect(russh::Disconnect::ByApplication, "Done", "").await;
+    result
+}
+
 fn luna_call(app: &AppHandle, config: &TvConfig, service: &str, method: &str, payload: Value) -> Result<Value, String> {
     if config.root_private_key.is_empty() {
         return Err("Add the root SSH private key in Settings".into());
-    }
-    let mut key = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
-    key.write_all(config.root_private_key.as_bytes()).map_err(|e| e.to_string())?;
-    #[cfg(target_os = "windows")]
-    {
-        let identity = Command::new("whoami").output().map_err(|e| e.to_string())?;
-        if !identity.status.success() { return Err("Could not identify the current Windows user".into()); }
-        let user = String::from_utf8_lossy(&identity.stdout).trim().to_owned();
-        let permission = Command::new("icacls")
-            .arg(key.path())
-            .args(["/inheritance:r", "/grant:r", &format!("{user}:R")])
-            .output().map_err(|e| e.to_string())?;
-        if !permission.status.success() {
-            return Err(format!("Could not secure temporary SSH key: {}", String::from_utf8_lossy(&permission.stderr).trim()));
-        }
     }
     if !service.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.')
         || !method.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'/') {
         return Err("Invalid TV service".into());
     }
     let known_hosts = app_dir(app)?.join("known_hosts");
-    let mut command = Command::new("ssh");
-    command.args([
-        "-i", &key.path().to_string_lossy(),
-        "-o", "BatchMode=yes",
-        "-o", "ConnectTimeout=5",
-        "-o", "StrictHostKeyChecking=accept-new",
-        "-o", &format!("UserKnownHostsFile={}", known_hosts.display()),
-        &format!("root@{}", config.tv_ip), "sh", "-s",
-    ]);
-    command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    #[cfg(target_os = "windows")]
-    command.creation_flags(CREATE_NO_WINDOW);
-    let mut child = command.spawn().map_err(|e| format!("Could not start SSH: {e}"))?;
     let data = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
     // Calls only receive allowlisted, validated values, so the shell quoting stays fixed.
     let script = format!("luna-send -w 5000 -n 1 -f luna://{service}/{method} '{data}' </dev/null\n");
-    child.stdin.take().ok_or("SSH input unavailable")?
-        .write_all(script.as_bytes()).map_err(|e| e.to_string())?;
-    let output = child.wait_with_output().map_err(|e| e.to_string())?;
-    if !output.status.success() || output.stdout.is_empty() {
-        let error = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        return Err(if error.is_empty() { "TV did not answer the SSH command".into() } else { error });
-    }
-    let response: Value = serde_json::from_slice(&output.stdout).map_err(|e| format!("Invalid TV response: {e}"))?;
+    let output = tauri::async_runtime::block_on(run_tv_script(
+        &config.tv_ip, &config.root_private_key, known_hosts, script,
+    ))?;
+    let response: Value = serde_json::from_slice(&output).map_err(|e| format!("Invalid TV response: {e}"))?;
     if response["returnValue"] != true {
         return Err(response["errorText"].as_str().unwrap_or("TV rejected the command").into());
     }
