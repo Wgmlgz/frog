@@ -1,8 +1,18 @@
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
 const settings = path.resolve(import.meta.dirname, '../src-tauri/gen/android/settings.gradle')
 const root = path.resolve(import.meta.dirname, '..')
+const iconRoot = path.join(root, 'src-tauri/icons/android')
+const androidRes = path.join(root, 'src-tauri/gen/android/app/src/main/res')
+for (const density of ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi', 'xxxhdpi']) {
+  const sourceDir = path.join(iconRoot, `mipmap-${density}`)
+  const targetDir = path.join(androidRes, `mipmap-${density}`)
+  mkdirSync(targetDir, { recursive: true })
+  for (const name of readdirSync(sourceDir).filter(name => name.endsWith('.png'))) {
+    cpSync(path.join(sourceDir, name), path.join(targetDir, name))
+  }
+}
 const pythonSources = path.join(root, 'tauri-plugin-tv-python/android/src/main/python')
 if (!pythonSources.startsWith(root + path.sep)) throw new Error('Python stage must stay inside the workspace')
 rmSync(pythonSources, { recursive: true, force: true })

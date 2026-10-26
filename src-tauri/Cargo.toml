@@ -39,3 +39,4 @@ anyhow = "1"
 
 [target.'cfg(target_os = "android")'.dependencies]
 tauri-plugin-tv-python = { path = "../tauri-plugin-tv-python" }
+jni = "0.21"

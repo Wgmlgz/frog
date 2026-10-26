@@ -3,6 +3,8 @@ mod config;
 mod devices;
 mod discovery;
 mod setup;
+#[cfg(target_os = "android")]
+mod widget;
 
 use devices::bedside_lamp;
 use devices::tv;

@@ -69,7 +69,7 @@ pub(crate) struct LampConfigInput {
 
 #[derive(Serialize)]
 pub(crate) struct LampState {
-    power: bool,
+    pub(crate) power: bool,
     brightness: u8,
     temperature: u16,
     rgb: Option<u32>,
@@ -276,6 +276,16 @@ pub(crate) fn read_state(config: &LampConfig) -> Result<LampState, String> {
     })
 }
 
+#[cfg(target_os = "android")]
+pub(crate) fn set_power_direct(config: &LampConfig, on: bool) -> Result<(), String> {
+    let result = send(config, "set_power", json!([if on { "on" } else { "off" }]))?;
+    if result.as_array().is_some_and(|items| items.first().and_then(Value::as_str) == Some("ok")) {
+        Ok(())
+    } else {
+        Err(format!("Lamp did not confirm command: {result}"))
+    }
+}
+
 pub(crate) fn device_model(config: &LampConfig) -> Result<String, String> {
     let info = send(config, "miIO.info", json!([]))?;
     info["model"]
@@ -353,7 +363,8 @@ pub(crate) async fn set_lamp_power(
     device_id: String,
     on: bool,
 ) -> Result<LampState, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    let refresh_app = app.clone();
+    let state = tauri::async_runtime::spawn_blocking(move || {
         change(
             app,
             &device_id,
@@ -362,7 +373,15 @@ pub(crate) async fn set_lamp_power(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    #[cfg(target_os = "android")]
+    {
+        use tauri_plugin_tv_python::TvPythonExt;
+        let _ = refresh_app.tv_python().refresh_widgets();
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = refresh_app;
+    Ok(state)
 }
 
 #[tauri::command]

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/tv_power_widget" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="horizontal" android:gravity="center_vertical" android:padding="10dp"
+    android:background="@drawable/widget_off">
+    <LinearLayout android:id="@+id/tv_power_open" android:layout_width="0dp" android:layout_height="match_parent"
+        android:layout_weight="1" android:orientation="vertical" android:gravity="center_vertical"
+        android:paddingStart="7dp" android:paddingEnd="4dp">
+        <TextView android:id="@+id/tv_power_title" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="TV" android:textColor="#FFFFFF" android:textSize="15sp" android:textStyle="bold"
+            android:maxLines="1" android:ellipsize="end" />
+        <TextView android:id="@+id/tv_power_status" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="Checking…" android:textColor="#FFFFFF" android:textSize="11sp" />
+    </LinearLayout>
+    <FrameLayout android:id="@+id/tv_power_button" android:layout_width="54dp" android:layout_height="match_parent">
+        <ImageView android:id="@+id/tv_power_button_icon" android:layout_width="28dp" android:layout_height="28dp"
+            android:layout_gravity="center" android:src="@drawable/widget_power"
+            android:contentDescription="@string/tv_power_widget_description" />
+    </FrameLayout>
+</LinearLayout>

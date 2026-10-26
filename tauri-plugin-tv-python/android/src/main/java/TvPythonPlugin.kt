@@ -22,6 +22,16 @@ class RequestArgs {
     lateinit var json: String
 }
 
+object TvPythonBridge {
+    @Synchronized
+    fun request(context: Context, json: String): String {
+        if (!Python.isStarted()) Python.start(AndroidPlatform(context.applicationContext))
+        val bridge = Python.getInstance().getModule("remote_bridge").get("mobile_bridge")
+            ?: throw IllegalStateException("Python remote bridge is unavailable")
+        return bridge.callAttr("request_json", json).toString()
+    }
+}
+
 @TauriPlugin
 class TvPythonPlugin(private val activity: Activity) : Plugin(activity) {
     private val worker = Executors.newSingleThreadExecutor()
@@ -31,6 +41,13 @@ class TvPythonPlugin(private val activity: Activity) : Plugin(activity) {
             activity.checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK) != PackageManager.PERMISSION_GRANTED) {
             activity.requestPermissions(arrayOf(Manifest.permission.ACCESS_LOCAL_NETWORK), 3701)
         }
+    }
+
+    @Command
+    fun refreshWidgets(invoke: Invoke) {
+        AllLightsWidgetProvider.enqueue(activity.applicationContext, false)
+        WidgetUi.refreshAll(activity.applicationContext)
+        invoke.resolve()
     }
 
     @Command
@@ -56,12 +73,7 @@ class TvPythonPlugin(private val activity: Activity) : Plugin(activity) {
         val args = invoke.parseArgs(RequestArgs::class.java)
         worker.execute {
             try {
-                if (!Python.isStarted()) {
-                    Python.start(AndroidPlatform(activity.applicationContext))
-                }
-                val bridge = Python.getInstance().getModule("remote_bridge").get("mobile_bridge")
-                    ?: throw IllegalStateException("Python remote bridge is unavailable")
-                val response = bridge.callAttr("request_json", args.json).toString()
+                val response = TvPythonBridge.request(activity.applicationContext, args.json)
                 val result = JSObject()
                 result.put("json", response)
                 invoke.resolve(result)

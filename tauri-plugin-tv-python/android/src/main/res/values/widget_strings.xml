@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="all_lights_widget_label">Lights</string>
+    <string name="all_lights_widget_description">Toggle all Frog lights</string>
+    <string name="lamp_toggle_widget_description">Toggle one Frog lamp</string>
+    <string name="tv_power_widget_description">TV power and open Frog</string>
+    <string name="tv_volume_widget_description">TV volume controls</string>
+    <string name="tv_audio_widget_description">TV volume and audio output controls</string>
+    <string name="tv_output_widget_description">Switch TV speakers and headphones</string>
+    <string name="tv_quick_widget_description">TV power and audio output</string>
+</resources>

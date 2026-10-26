@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="horizontal" android:gravity="center_vertical" android:padding="7dp"
+    android:background="@drawable/widget_off">
+    <TextView android:id="@+id/tv_volume_minus" android:layout_width="45dp" android:layout_height="match_parent"
+        android:gravity="center" android:text="−" android:textColor="#FFFFFF" android:textSize="28sp"
+        android:contentDescription="Decrease TV volume" />
+    <LinearLayout android:id="@+id/tv_volume_open" android:layout_width="0dp" android:layout_height="match_parent"
+        android:layout_weight="1" android:orientation="vertical" android:gravity="center">
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="TV volume" android:textColor="#CBD5E1" android:textSize="11sp" />
+        <TextView android:id="@+id/tv_volume_value" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="--" android:textColor="#FFFFFF" android:textSize="19sp" android:textStyle="bold" />
+    </LinearLayout>
+    <TextView android:id="@+id/tv_volume_plus" android:layout_width="45dp" android:layout_height="match_parent"
+        android:gravity="center" android:text="+" android:textColor="#FFFFFF" android:textSize="28sp"
+        android:contentDescription="Increase TV volume" />
+</LinearLayout>

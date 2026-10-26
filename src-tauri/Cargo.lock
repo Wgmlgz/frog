@@ -1404,6 +1404,7 @@ dependencies = [
  "cbc 0.1.2",
  "hex",
  "if-addrs",
+ "jni",
  "md-5",
  "rc4",
  "reqwest 0.12.28",

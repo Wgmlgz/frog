@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 use std::{
     fs,
     net::IpAddr,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
@@ -189,6 +189,10 @@ async fn run_tv_script(address: &str, private_key: &str, known_hosts: PathBuf, s
 }
 
 fn luna_call(app: &AppHandle, config: &TvConfig, service: &str, method: &str, payload: Value) -> Result<Value, String> {
+    luna_call_at(&app_dir(app)?, config, service, method, payload)
+}
+
+fn luna_call_at(data_dir: &Path, config: &TvConfig, service: &str, method: &str, payload: Value) -> Result<Value, String> {
     if config.root_private_key.is_empty() {
         return Err("Add the root SSH private key in Settings".into());
     }
@@ -196,7 +200,7 @@ fn luna_call(app: &AppHandle, config: &TvConfig, service: &str, method: &str, pa
         || !method.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'/') {
         return Err("Invalid TV service".into());
     }
-    let known_hosts = app_dir(app)?.join("known_hosts");
+    let known_hosts = data_dir.join("known_hosts");
     let data = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
     // Calls only receive allowlisted, validated values, so the shell quoting stays fixed.
     let script = format!("luna-send -w 5000 -n 1 -f luna://{service}/{method} '{data}' </dev/null\n");
@@ -211,12 +215,68 @@ fn luna_call(app: &AppHandle, config: &TvConfig, service: &str, method: &str, pa
 }
 
 fn audio_state(app: &AppHandle, config: &TvConfig) -> Result<AudioState, String> {
-    let result = luna_call(app, config, "com.webos.service.audio", "master/getVolume", json!({}))?;
+    audio_state_at(&app_dir(app)?, config)
+}
+
+fn audio_state_at(data_dir: &Path, config: &TvConfig) -> Result<AudioState, String> {
+    let result = luna_call_at(data_dir, config, "com.webos.service.audio", "master/getVolume", json!({}))?;
     let status = &result["volumeStatus"];
     Ok(AudioState {
         volume: status["volume"].as_u64().ok_or("TV did not report volume")? as u8,
         sound_output: status["soundOutput"].as_str().ok_or("TV did not report sound output")?.into(),
     })
+}
+
+#[cfg(target_os = "android")]
+pub(crate) fn widget_audio(config: &TvConfig, data_dir: &Path, action: &str) -> Result<AudioState, String> {
+    match action {
+        "refresh" => {}
+        "up" | "down" => {
+            let current = audio_state_at(data_dir, config)?;
+            let volume = if action == "up" { current.volume.saturating_add(1).min(100) }
+                else { current.volume.saturating_sub(1) };
+            luna_call_at(data_dir, config, "com.webos.service.audio", "master/setVolume",
+                json!({"soundOutput":current.sound_output,"volume":volume}))?;
+        }
+        "speaker" => {
+            luna_call_at(data_dir, config, "com.webos.service.apiadapter", "audio/changeSoundOutput",
+                json!({"output":"tv_speaker"}))?;
+        }
+        "headphones" => {
+            let address = &config.preferred_bluetooth_address;
+            let paired = luna_call_at(data_dir, config, "com.webos.service.bluetooth", "gap/getTrustedDevices",
+                json!({"service":"audio"}))?;
+            if !paired["device"].as_array().is_some_and(|devices| devices.iter().any(|device|
+                device["address"].as_str().is_some_and(|found| found.eq_ignore_ascii_case(address)))) {
+                return Err("Configured headphones are not paired with the TV".into());
+            }
+            luna_call_at(data_dir, config, "com.webos.service.bluetooth", "service/connect",
+                json!({"service":"audio","address":address}))?;
+            for attempt in 0..12 {
+                std::thread::sleep(Duration::from_secs(1));
+                let paired = luna_call_at(data_dir, config, "com.webos.service.bluetooth", "gap/getTrustedDevices",
+                    json!({"service":"audio"}))?;
+                let connected = paired["device"].as_array().is_some_and(|devices| devices.iter().any(|device|
+                    device["address"].as_str().is_some_and(|found| found.eq_ignore_ascii_case(address))
+                        && device["state"] == true));
+                let state = audio_state_at(data_dir, config)?;
+                if connected && state.sound_output == "bt_soundbar" { return Ok(state); }
+                if connected && attempt >= 2 && state.sound_output != "bt_soundbar" {
+                    luna_call_at(data_dir, config, "com.webos.service.apiadapter", "audio/changeSoundOutput",
+                        json!({"output":"bt_soundbar"}))?;
+                }
+            }
+            return Err("Headphones did not connect; check that they are powered on".into());
+        }
+        _ => return Err("Unsupported TV widget action".into()),
+    }
+    audio_state_at(data_dir, config)
+}
+
+#[cfg(target_os = "android")]
+impl AudioState {
+    pub(crate) fn widget_volume(&self) -> u8 { self.volume }
+    pub(crate) fn widget_output(&self) -> &str { &self.sound_output }
 }
 
 fn paired_devices(app: &AppHandle, config: &TvConfig) -> Result<Vec<Value>, String> {
@@ -267,21 +327,31 @@ pub(crate) async fn get_state(app: AppHandle, device_id: String) -> Result<Audio
 #[tauri::command]
 pub(crate) async fn set_volume(app: AppHandle, device_id: String, volume: u8) -> Result<AudioState, String> {
     if volume > 100 { return Err("Volume must be 0 to 100".into()); }
-    tauri::async_runtime::spawn_blocking(move || {
+    #[cfg(target_os = "android")]
+    let refresh_app = app.clone();
+    let state = tauri::async_runtime::spawn_blocking(move || {
         let config = config::tv(&app, &device_id)?;
         let output = audio_state(&app, &config)?.sound_output;
         luna_call(&app, &config, "com.webos.service.audio", "master/setVolume", json!({"soundOutput":output,"volume":volume}))?;
         audio_state(&app, &config)
-    }).await.map_err(|e| e.to_string())?
+    }).await.map_err(|e| e.to_string())??;
+    #[cfg(target_os = "android")]
+    let _ = refresh_app.tv_python().refresh_widgets();
+    Ok(state)
 }
 
 #[tauri::command]
 pub(crate) async fn set_output(app: AppHandle, device_id: String, output: String) -> Result<AudioState, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    #[cfg(target_os = "android")]
+    let refresh_app = app.clone();
+    let state = tauri::async_runtime::spawn_blocking(move || {
         let config = config::tv(&app, &device_id)?;
         change_output(&app, &config, &output)?;
         audio_state(&app, &config)
-    }).await.map_err(|e| e.to_string())?
+    }).await.map_err(|e| e.to_string())??;
+    #[cfg(target_os = "android")]
+    let _ = refresh_app.tv_python().refresh_widgets();
+    Ok(state)
 }
 
 #[tauri::command]
@@ -292,7 +362,9 @@ pub(crate) async fn get_paired_devices(app: AppHandle, device_id: String) -> Res
 
 #[tauri::command]
 pub(crate) async fn connect_headphones(app: AppHandle, device_id: String) -> Result<AudioState, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    #[cfg(target_os = "android")]
+    let refresh_app = app.clone();
+    let state = tauri::async_runtime::spawn_blocking(move || -> Result<AudioState, String> {
         let config = config::tv(&app, &device_id)?;
         let address = &config.preferred_bluetooth_address;
         if !paired_devices(&app, &config)?.iter().any(|device| device["address"].as_str()
@@ -318,7 +390,10 @@ pub(crate) async fn connect_headphones(app: AppHandle, device_id: String) -> Res
             }
         }
         Err("Headphones did not connect; check that they are powered on".into())
-    }).await.map_err(|e| e.to_string())?
+    }).await.map_err(|e| e.to_string())??;
+    #[cfg(target_os = "android")]
+    let _ = refresh_app.tv_python().refresh_widgets();
+    Ok(state)
 }
 
 #[cfg(not(target_os = "android"))]

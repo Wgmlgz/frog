@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="40dp" android:minHeight="40dp"
+    android:targetCellWidth="1" android:targetCellHeight="1"
+    android:initialLayout="@layout/all_lights_widget" android:previewLayout="@layout/lights_widget_preview"
+    android:configure="com.wgmlgz.frog.tvpython.WidgetConfigActivity"
+    android:description="@string/lamp_toggle_widget_description"
+    android:updatePeriodMillis="1800000" android:widgetCategory="home_screen" />

@@ -24,6 +24,10 @@ impl<R: Runtime> TvPython<R> {
         Ok(response.json)
     }
 
+    pub fn refresh_widgets(&self) -> Result<(), tauri::plugin::mobile::PluginInvokeError> {
+        self.0.run_mobile_plugin::<()>("refreshWidgets", ())
+    }
+
 
     pub fn read_clipboard_text(&self) -> Result<String, tauri::plugin::mobile::PluginInvokeError> {
         let response: ClipboardText = self.0.run_mobile_plugin("readClipboardText", ())?;

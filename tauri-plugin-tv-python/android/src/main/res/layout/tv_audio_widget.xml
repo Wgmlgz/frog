@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:padding="10dp" android:background="@drawable/widget_off">
+    <LinearLayout android:id="@+id/tv_audio_open" android:layout_width="match_parent" android:layout_height="0dp"
+        android:layout_weight="1" android:orientation="vertical" android:gravity="center_vertical" android:paddingStart="6dp">
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="TV audio" android:textColor="#FFFFFF" android:textSize="15sp" android:textStyle="bold" />
+        <TextView android:id="@+id/tv_audio_output" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="Checking…" android:textColor="#CBD5E1" android:textSize="11sp" />
+    </LinearLayout>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+        android:orientation="horizontal" android:gravity="center">
+        <TextView android:id="@+id/tv_audio_minus" android:layout_width="32dp" android:layout_height="match_parent"
+            android:gravity="center" android:text="−" android:textColor="#FFFFFF" android:textSize="27sp"
+            android:contentDescription="Decrease TV volume" />
+        <TextView android:id="@+id/tv_audio_value" android:layout_width="0dp" android:layout_height="wrap_content"
+            android:layout_weight="1" android:gravity="center" android:text="--" android:textColor="#FFFFFF"
+            android:textSize="17sp" android:textStyle="bold" android:singleLine="true" />
+        <TextView android:id="@+id/tv_audio_plus" android:layout_width="32dp" android:layout_height="match_parent"
+            android:gravity="center" android:text="+" android:textColor="#FFFFFF" android:textSize="27sp"
+            android:contentDescription="Increase TV volume" />
+    </LinearLayout>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+        android:orientation="horizontal" android:gravity="center">
+        <ImageView android:id="@+id/tv_audio_speaker" android:layout_width="0dp" android:layout_height="match_parent"
+            android:layout_weight="1" android:padding="11dp" android:src="@drawable/widget_speaker"
+            android:scaleType="centerInside" android:contentDescription="Use TV speakers" />
+        <ImageView android:id="@+id/tv_audio_headphones" android:layout_width="0dp" android:layout_height="match_parent"
+            android:layout_weight="1" android:padding="11dp" android:src="@drawable/widget_headphones"
+            android:scaleType="centerInside" android:contentDescription="Connect headphones" />
+    </LinearLayout>
+</LinearLayout>

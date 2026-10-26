@@ -93,7 +93,7 @@ fn read_unlocked(app: &AppHandle) -> Result<AppConfig, String> {
     parse(&fs::read_to_string(path).map_err(|e| e.to_string())?)
 }
 
-fn parse(source: &str) -> Result<AppConfig, String> {
+pub(crate) fn parse(source: &str) -> Result<AppConfig, String> {
     let config: AppConfig =
         toml::from_str(source).map_err(|e| format!("Invalid Frog config: {e}"))?;
     validate(&config)?;
@@ -142,6 +142,11 @@ fn write_unlocked(app: &AppHandle, config: &AppConfig) -> Result<(), String> {
         toml::to_string_pretty(config).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "android")]
+    {
+        use tauri_plugin_tv_python::TvPythonExt;
+        let _ = app.tv_python().refresh_widgets();
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

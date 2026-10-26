@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:gravity="center" android:padding="6dp"
+    android:background="@drawable/widget_on">
+    <ImageView android:layout_width="26dp" android:layout_height="26dp"
+        android:src="@drawable/widget_power_dark" android:contentDescription="@string/all_lights_widget_description" />
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="3dp" android:gravity="center" android:singleLine="true"
+        android:text="@string/all_lights_widget_label" android:textColor="#1E293B" android:textSize="10sp" />
+</LinearLayout>

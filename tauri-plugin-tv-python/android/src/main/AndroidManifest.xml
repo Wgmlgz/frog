@@ -2,4 +2,40 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
+    <application>
+        <receiver android:name="com.wgmlgz.frog.tvpython.AllLightsWidgetProvider" android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/all_lights_widget_info" />
+        </receiver>
+        <receiver android:name="com.wgmlgz.frog.tvpython.LampWidgetTapReceiver" android:exported="false" />
+        <receiver android:name="com.wgmlgz.frog.tvpython.LampToggleWidgetProvider" android:exported="true">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/lamp_toggle_widget_info" />
+        </receiver>
+        <receiver android:name="com.wgmlgz.frog.tvpython.TvPowerWidgetProvider" android:exported="true">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/tv_power_widget_info" />
+        </receiver>
+        <receiver android:name="com.wgmlgz.frog.tvpython.TvVolumeWidgetProvider" android:exported="true">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/tv_volume_widget_info" />
+        </receiver>
+        <receiver android:name="com.wgmlgz.frog.tvpython.TvAudioWidgetProvider" android:exported="true">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/tv_audio_widget_info" />
+        </receiver>
+        <receiver android:name="com.wgmlgz.frog.tvpython.TvOutputWidgetProvider" android:exported="true">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/tv_output_widget_info" />
+        </receiver>
+        <receiver android:name="com.wgmlgz.frog.tvpython.TvQuickWidgetProvider" android:exported="true">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/tv_quick_widget_info" />
+        </receiver>
+        <receiver android:name="com.wgmlgz.frog.tvpython.ExtraWidgetTapReceiver" android:exported="false" />
+        <activity android:name="com.wgmlgz.frog.tvpython.WidgetConfigActivity" android:exported="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+    </application>
 </manifest>
