@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LG TV Audio</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; }
+    * { box-sizing: border-box; }
+    body { min-height: 100vh; margin: 0; display: grid; place-items: center; padding: 24px; background: radial-gradient(circle at 20% 0%, #243a53, transparent 42%), #101822; color: #edf4fa; }
+    main { width: min(100%, 520px); padding: 34px; border: 1px solid #394c5e; border-radius: 24px; background: #1b2734; box-shadow: 0 24px 60px #070c1390; }
+    .eyebrow { color: #9bb4c9; font-size: 12px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; }
+    h1 { margin: 8px 0 4px; font-size: clamp(28px, 6vw, 38px); letter-spacing: -.04em; }
+    .subtitle { margin: 0; color: #a9bdce; }
+    .status { display: flex; align-items: center; gap: 8px; margin: 28px 0 20px; color: #b9cbda; font-size: 14px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #e2ad66; }
+    .dot.online { background: #6ed3a4; }
+    .value { display: flex; align-items: baseline; gap: 6px; margin: 2px 0 16px; }
+    output { font-size: 82px; font-weight: 700; line-height: 1; letter-spacing: -.08em; font-variant-numeric: tabular-nums; }
+    .percent { color: #9fb5c7; font-size: 24px; }
+    input[type=range] { width: 100%; margin: 4px 0 27px; accent-color: #72d9ac; cursor: pointer; }
+    .buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    button { min-height: 54px; border: 1px solid #51687c; border-radius: 13px; background: #293a4b; color: #edf4fa; font: inherit; font-size: 23px; font-weight: 600; cursor: pointer; }
+    button:hover { background: #344c60; }
+    button:focus-visible, input:focus-visible { outline: 3px solid #72d9ac; outline-offset: 3px; }
+    button:disabled, input:disabled { opacity: .45; cursor: not-allowed; }
+    .hint { margin: 22px 0 0; color: #8fa6b8; font-size: 13px; line-height: 1.5; }
+    .error { color: #ffbdab; }
+    section { margin-top: 32px; padding-top: 26px; border-top: 1px solid #394c5e; }
+    h2 { margin: 0 0 14px; font-size: 21px; letter-spacing: -.02em; }
+    .outputs { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .outputs button { font-size: 15px; text-align: left; padding: 0 16px; }
+    .outputs button.active { border-color: #72d9ac; background: #244638; }
+    .current-output { margin: 12px 0 0; color: #a9bdce; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="eyebrow">Local TV control</div>
+    <h1>TV audio</h1>
+    <p class="subtitle">LG webOS · 192.168.31.89</p>
+    <div class="status" role="status"><span class="dot" id="dot"></span><span id="status">Connecting to TV…</span></div>
+    <div class="value"><output id="value" for="slider">--</output><span class="percent">%</span></div>
+    <label for="slider" class="eyebrow">Set volume</label>
+    <input id="slider" type="range" min="0" max="100" value="0" disabled>
+    <div class="buttons">
+      <button type="button" id="down" aria-label="Volume down" disabled>−</button>
+      <button type="button" id="up" aria-label="Volume up" disabled>+</button>
+    </div>
+    <p class="hint">Changes are sent when you release the slider. The page refreshes the TV’s volume automatically.</p>
+    <section>
+      <h2>Sound output</h2>
+      <div class="outputs">
+        <button type="button" id="speaker" disabled>TV speakers</button>
+        <button type="button" id="bluetooth" disabled>WH-1000XM6</button>
+      </div>
+      <p class="current-output" id="current-output">Checking current output…</p>
+    </section>
+  </main>
+  <script>
+    const slider = document.getElementById('slider');
+    const value = document.getElementById('value');
+    const status = document.getElementById('status');
+    const dot = document.getElementById('dot');
+    const controls = [...document.querySelectorAll('button, input')];
+    const outputLabel = document.getElementById('current-output');
+    const speaker = document.getElementById('speaker');
+    const bluetooth = document.getElementById('bluetooth');
+    let current = null;
+    let busy = false;
+    let dragging = false;
+
+    function showState(data) {
+      current = data.volume;
+      slider.value = data.volume;
+      value.textContent = data.volume;
+      speaker.classList.toggle('active', data.sound_output === 'tv_speaker');
+      bluetooth.classList.toggle('active', data.sound_output === 'bt_soundbar');
+      speaker.setAttribute('aria-pressed', data.sound_output === 'tv_speaker');
+      bluetooth.setAttribute('aria-pressed', data.sound_output === 'bt_soundbar');
+      const labels = {tv_speaker: 'TV speakers', bt_soundbar: 'Bluetooth device'};
+      outputLabel.textContent = 'Current: ' + (labels[data.sound_output] || data.sound_output || 'Unknown');
+      controls.forEach(control => control.disabled = false);
+      dot.classList.add('online');
+      status.classList.remove('error');
+      status.textContent = 'TV connected';
+    }
+
+    function showError(message) {
+      dot.classList.remove('online');
+      status.classList.add('error');
+      status.textContent = message;
+      controls.forEach(control => control.disabled = true);
+    }
+
+    async function readVolume() {
+      if (busy || dragging) return;
+      try {
+        const response = await fetch('/api/state', {cache: 'no-store'});
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'TV unavailable');
+        showState(data);
+      } catch (error) { showError('Cannot reach TV. Retrying…'); }
+    }
+
+    async function setVolume(volume) {
+      if (busy || current === null) return;
+      busy = true;
+      controls.forEach(control => control.disabled = true);
+      status.textContent = 'Setting volume…';
+      try {
+        const response = await fetch('/api/volume', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({volume: Math.max(0, Math.min(100, volume))})
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Command failed');
+        showState(data);
+      } catch (error) { showError('Volume change failed. Retrying…'); }
+      finally { busy = false; }
+    }
+
+    slider.addEventListener('pointerdown', () => dragging = true);
+    slider.addEventListener('pointerup', () => dragging = false);
+    slider.addEventListener('input', () => value.textContent = slider.value);
+    slider.addEventListener('change', () => { dragging = false; setVolume(Number(slider.value)); });
+    document.getElementById('down').addEventListener('click', () => setVolume(current - 1));
+    document.getElementById('up').addEventListener('click', () => setVolume(current + 1));
+    async function sendAction(path, payload, message) {
+      if (busy || current === null) return;
+      busy = true;
+      controls.forEach(control => control.disabled = true);
+      status.textContent = message;
+      try {
+        const response = await fetch(path, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Command failed');
+        showState(data);
+      } catch (error) { showError(error.message || 'TV command failed. Retrying…'); }
+      finally { busy = false; }
+    }
+    speaker.addEventListener('click', () => sendAction('/api/audio', {output: 'tv_speaker'}, 'Switching to TV speakers…'));
+    bluetooth.addEventListener('click', () => sendAction('/api/bluetooth/connect', {}, 'Connecting headphones…'));
+    readVolume();
+    setInterval(readVolume, 10000);
+  </script>
+</body>
+</html>

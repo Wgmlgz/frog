@@ -1,0 +1,3 @@
+[submodule "tv/vendor/bscpylgtv"]
+	path = tv/vendor/bscpylgtv
+	url = https://github.com/chros73/bscpylgtv.git

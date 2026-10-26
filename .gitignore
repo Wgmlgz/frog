@@ -1,0 +1,8 @@
+tv/.venv/
+tv/__pycache__/
+tv/.aiopylgtv.sqlite*
+tv/.tv_root_key*
+tv/.tv_known_hosts
+tv/*.pyc
+tools/bscpylgtv/
+.aiopylgtv.sqlite*
