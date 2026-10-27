@@ -35,6 +35,9 @@
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/tv_quick_widget_info" />
         </receiver>
         <receiver android:name="com.wgmlgz.frog.tvpython.ExtraWidgetTapReceiver" android:exported="false" />
+        <receiver android:name="com.wgmlgz.frog.tvpython.WidgetRefreshReceiver" android:exported="false">
+            <intent-filter><action android:name="android.intent.action.MY_PACKAGE_REPLACED" /></intent-filter>
+        </receiver>
         <activity android:name="com.wgmlgz.frog.tvpython.WidgetConfigActivity" android:exported="true"
             android:theme="@android:style/Theme.Material.Light.NoActionBar" />
     </application>

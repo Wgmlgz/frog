@@ -15,6 +15,7 @@ use std::{
     fs,
     panic::{catch_unwind, AssertUnwindSafe},
     path::Path,
+    thread,
 };
 
 fn run(config_path: &str, toggle: bool) -> Result<&'static str, String> {
@@ -32,10 +33,18 @@ fn run(config_path: &str, toggle: bool) -> Result<&'static str, String> {
         return Ok("empty");
     }
 
-    let states: Vec<_> = lamps
-        .iter()
-        .map(|lamp| bedside_lamp::read_state(lamp))
-        .collect();
+    let states: Vec<_> = thread::scope(|scope| {
+        let jobs: Vec<_> = lamps
+            .iter()
+            .map(|lamp| scope.spawn(move || bedside_lamp::read_state(lamp)))
+            .collect();
+        jobs.into_iter()
+            .map(|job| {
+                job.join()
+                    .unwrap_or_else(|_| Err("Lamp status worker failed".into()))
+            })
+            .collect()
+    });
     if !toggle {
         if states.iter().any(Result::is_err) {
             return Ok("unavailable");
@@ -62,14 +71,22 @@ fn run(config_path: &str, toggle: bool) -> Result<&'static str, String> {
         .iter()
         .all(|state| state.as_ref().is_ok_and(|state| state.power));
     let target_on = !all_on;
-    let mut failures = 0;
-    for lamp in lamps {
-        if bedside_lamp::set_power_direct(lamp, target_on).is_err() {
-            failures += 1;
-        }
-    }
-    if failures > 0 {
-        return Err(format!("{failures} lamp command(s) failed"));
+    let failures = thread::scope(|scope| {
+        let jobs: Vec<_> = lamps
+            .iter()
+            .map(|lamp| scope.spawn(move || bedside_lamp::set_power_direct(lamp, target_on)))
+            .collect();
+        jobs.into_iter()
+            .enumerate()
+            .filter_map(|(index, job)| match job.join() {
+                Ok(Ok(())) => None,
+                Ok(Err(error)) => Some(format!("Lamp {}: {error}", index + 1)),
+                Err(_) => Some(format!("Lamp {}: command worker failed", index + 1)),
+            })
+            .collect::<Vec<_>>()
+    });
+    if !failures.is_empty() {
+        return Err(failures.join("; "));
     }
     Ok(if target_on { "on" } else { "off" })
 }

@@ -4,11 +4,11 @@
     android:orientation="horizontal" android:gravity="center" android:padding="8dp"
     android:background="@drawable/widget_off">
     <ImageView android:id="@+id/tv_output_speaker" android:layout_width="0dp" android:layout_height="match_parent"
-        android:layout_weight="1" android:layout_margin="3dp" android:padding="12dp"
+        android:layout_weight="1" android:layout_margin="3dp" android:padding="3dp"
         android:src="@drawable/widget_speaker" android:scaleType="centerInside"
         android:contentDescription="Use TV speakers" />
     <ImageView android:id="@+id/tv_output_headphones" android:layout_width="0dp" android:layout_height="match_parent"
-        android:layout_weight="1" android:layout_margin="3dp" android:padding="12dp"
+        android:layout_weight="1" android:layout_margin="3dp" android:padding="3dp"
         android:src="@drawable/widget_headphones" android:scaleType="centerInside"
         android:contentDescription="Connect headphones" />
 </LinearLayout>

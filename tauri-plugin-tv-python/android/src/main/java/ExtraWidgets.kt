@@ -36,9 +36,27 @@ class TvAudioWidgetProvider : ConfiguredWidgetProvider()
 class TvOutputWidgetProvider : ConfiguredWidgetProvider()
 class TvQuickWidgetProvider : ConfiguredWidgetProvider()
 
+class WidgetRefreshReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action != Intent.ACTION_MY_PACKAGE_REPLACED) return
+        try {
+            AllLightsWidgetProvider.refreshAfterInstall(context)
+            WidgetUi.renderAllConfigured(context)
+            WidgetUi.refreshAll(context)
+            WidgetUi.scheduleRepaint(context, -1, 10)
+        } catch (error: Throwable) {
+            Log.e("FrogWidget", "Could not restore widgets after app update", error)
+        }
+    }
+}
+
 open class ConfiguredWidgetProvider : AppWidgetProvider() {
     override fun onUpdate(context: Context, manager: AppWidgetManager, widgetIds: IntArray) {
-        widgetIds.forEach { WidgetUi.render(context, it); WidgetUi.enqueue(context, it, "refresh") }
+        Log.d("FrogWidget", "onUpdate ${javaClass.simpleName}: ${widgetIds.joinToString()}")
+        widgetIds.forEach {
+            WidgetUi.render(context, it, partial = true)
+            if (WidgetUi.shouldRefreshFromUpdate(context, it)) WidgetUi.enqueue(context, it, "refresh")
+        }
     }
 
     override fun onDeleted(context: Context, widgetIds: IntArray) {
@@ -79,6 +97,7 @@ class WidgetConfigActivity : Activity() {
                 WidgetUi.setDevice(this, id, choices[index].optString("id"), choices[index].optString("name"))
                 WidgetUi.render(this, id)
                 WidgetUi.enqueue(this, id, "refresh")
+                WidgetUi.scheduleRepaint(this, id, 2)
                 setResult(RESULT_OK, Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id))
                 finish()
             }.setOnCancelListener { finish() }.show()
@@ -87,6 +106,9 @@ class WidgetConfigActivity : Activity() {
 
 internal object WidgetUi {
     private const val PREFS = "frog_extra_widgets"
+    private const val RENDER_VERSION = 3
+    private fun renderStamp(context: Context) =
+        context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime + RENDER_VERSION
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     fun config(context: Context) = File(context.dataDir, "frog.toml")
     fun type(context: Context, id: Int): String? = when (
@@ -107,7 +129,17 @@ internal object WidgetUi {
     }
     fun clear(context: Context, id: Int) {
         prefs(context).edit().remove("device_$id").remove("name_$id")
-            .remove("state_$id").remove("volume_$id").remove("output_$id").apply()
+            .remove("state_$id").remove("volume_$id").remove("output_$id")
+            .remove("rendered_$id").remove("last_update_refresh_$id").apply()
+    }
+    fun rendered(context: Context, id: Int) =
+        (prefs(context).all["rendered_$id"] as? Number)?.toLong() == renderStamp(context)
+    fun shouldRefreshFromUpdate(context: Context, id: Int): Boolean {
+        val preferences = prefs(context)
+        val now = System.currentTimeMillis()
+        if (now - preferences.getLong("last_update_refresh_$id", 0) <= 30_000) return false
+        preferences.edit().putLong("last_update_refresh_$id", now).apply()
+        return true
     }
     fun state(context: Context, id: Int) = prefs(context).getString("state_$id", "unknown") ?: "unknown"
     fun setState(context: Context, id: Int, state: String) {
@@ -139,6 +171,21 @@ internal object WidgetUi {
             manager.getAppWidgetIds(ComponentName(context, provider)).forEach { enqueue(context, it, "refresh") }
         }
     }
+    fun scheduleRepaint(context: Context, id: Int, delaySeconds: Long) {
+        val request = OneTimeWorkRequestBuilder<WidgetRepaintWorker>()
+            .setInputData(Data.Builder().putInt("id", id).build())
+            .setInitialDelay(delaySeconds, TimeUnit.SECONDS).build()
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            "frog_widget_repaint_$id", ExistingWorkPolicy.REPLACE, request)
+    }
+    fun renderAllConfigured(context: Context) {
+        val manager = AppWidgetManager.getInstance(context)
+        listOf(LampToggleWidgetProvider::class.java, TvPowerWidgetProvider::class.java,
+            TvVolumeWidgetProvider::class.java, TvAudioWidgetProvider::class.java,
+            TvOutputWidgetProvider::class.java, TvQuickWidgetProvider::class.java).forEach { provider ->
+            manager.getAppWidgetIds(ComponentName(context, provider)).forEach { render(context, it) }
+        }
+    }
     private fun click(context: Context, id: Int, action: String): PendingIntent {
         val intent = Intent(context, ExtraWidgetTapReceiver::class.java).apply {
             this.action = "com.wgmlgz.frog.WIDGET_ACTION"
@@ -154,20 +201,22 @@ internal object WidgetUi {
         return PendingIntent.getActivity(context, id, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     }
-    fun render(context: Context, id: Int) {
+    fun render(context: Context, id: Int, partial: Boolean = false) {
         val kind = type(context, id) ?: return
-        Log.d("FrogWidget", "Render widget $id ($kind)")
         val state = state(context, id)
+        Log.d("FrogWidget", "Render widget $id ($kind): ${name(context, id)}, $state")
         val views = when (kind) {
             "lamp" -> RemoteViews(context.packageName, R.layout.all_lights_widget).apply {
-                setInt(R.id.all_lights_widget, "setBackgroundResource", if (state == "on") R.drawable.widget_on else R.drawable.widget_off)
+                setImageViewResource(R.id.widget_dynamic_background,
+                    if (state == "on") R.drawable.widget_on else R.drawable.widget_off)
                 setTextViewText(R.id.widget_label, name(context, id).ifEmpty { "Lamp" }.take(12))
                 setTextColor(R.id.widget_label, if (state == "on") Color.rgb(30, 41, 59) else Color.WHITE)
                 setImageViewResource(R.id.widget_power_icon, if (state == "on") R.drawable.widget_power_dark else R.drawable.widget_power)
                 setOnClickPendingIntent(R.id.all_lights_widget, click(context, id, "toggle"))
             }
             "power" -> RemoteViews(context.packageName, R.layout.tv_power_widget).apply {
-                setInt(R.id.tv_power_widget, "setBackgroundResource", if (state == "on") R.drawable.widget_on else R.drawable.widget_off)
+                setImageViewResource(R.id.widget_dynamic_background,
+                    if (state == "on") R.drawable.widget_on else R.drawable.widget_off)
                 val foreground = if (state == "on") Color.rgb(30, 41, 59) else Color.WHITE
                 setTextColor(R.id.tv_power_title, foreground)
                 setTextColor(R.id.tv_power_status, foreground)
@@ -188,38 +237,35 @@ internal object WidgetUi {
             }
             "output" -> RemoteViews(context.packageName, R.layout.tv_output_widget).apply {
                 val output = prefs(context).getString("output_$id", "")
-                setInt(R.id.tv_output_speaker, "setBackgroundResource",
-                    if (output == "tv_speaker") R.drawable.widget_selected else android.R.color.transparent)
-                setInt(R.id.tv_output_headphones, "setBackgroundResource",
-                    if (output == "bt_soundbar") R.drawable.widget_selected else android.R.color.transparent)
                 setImageViewResource(R.id.tv_output_speaker,
-                    if (output == "tv_speaker") R.drawable.widget_speaker_dark else R.drawable.widget_speaker)
+                    if (output == "tv_speaker") R.drawable.widget_speaker_selected_light else R.drawable.widget_speaker)
                 setImageViewResource(R.id.tv_output_headphones,
-                    if (output == "bt_soundbar") R.drawable.widget_headphones_dark else R.drawable.widget_headphones)
+                    if (output == "bt_soundbar") R.drawable.widget_headphones_selected_light else R.drawable.widget_headphones)
                 setOnClickPendingIntent(R.id.tv_output_speaker, click(context, id, "speaker"))
                 setOnClickPendingIntent(R.id.tv_output_headphones, click(context, id, "headphones"))
             }
             "quick" -> RemoteViews(context.packageName, R.layout.tv_quick_widget).apply {
+                setImageViewResource(R.id.widget_dynamic_background,
+                    if (state == "on") R.drawable.widget_on else R.drawable.widget_off)
                 val on = state == "on"
                 val foreground = if (on) Color.rgb(30, 41, 59) else Color.WHITE
                 val output = prefs(context).getString("output_$id", "")
-                setInt(R.id.tv_quick_widget, "setBackgroundResource", if (on) R.drawable.widget_on else R.drawable.widget_off)
                 setTextViewText(R.id.tv_quick_title, name(context, id).ifEmpty { "TV" }.take(18))
                 setTextViewText(R.id.tv_quick_status, when (state) {
-                    "on" -> "On"; "off" -> "Off"; "starting" -> "Starting…"; "unavailable" -> "Offline"; else -> "Checking…"
+                    "on" -> if (output.isNullOrEmpty()) "Audio unavailable" else "On"
+                    "off" -> "Off"; "starting" -> "Starting…"; "unavailable" -> "Offline"; else -> "Checking…"
                 })
                 setTextColor(R.id.tv_quick_title, foreground)
                 setTextColor(R.id.tv_quick_status, foreground)
                 setImageViewResource(R.id.tv_quick_power_icon, if (on) R.drawable.widget_power_dark else R.drawable.widget_power)
-                val selectedBackground = if (on) R.drawable.widget_selected_dark else R.drawable.widget_selected
-                setInt(R.id.tv_quick_speaker, "setBackgroundResource",
-                    if (output == "tv_speaker") selectedBackground else android.R.color.transparent)
-                setInt(R.id.tv_quick_headphones, "setBackgroundResource",
-                    if (output == "bt_soundbar") selectedBackground else android.R.color.transparent)
                 setImageViewResource(R.id.tv_quick_speaker,
-                    if (on != (output == "tv_speaker")) R.drawable.widget_speaker_dark else R.drawable.widget_speaker)
+                    if (output == "tv_speaker") {
+                        if (on) R.drawable.widget_speaker_selected_dark else R.drawable.widget_speaker_selected_light
+                    } else if (on) R.drawable.widget_speaker_dark else R.drawable.widget_speaker)
                 setImageViewResource(R.id.tv_quick_headphones,
-                    if (on != (output == "bt_soundbar")) R.drawable.widget_headphones_dark else R.drawable.widget_headphones)
+                    if (output == "bt_soundbar") {
+                        if (on) R.drawable.widget_headphones_selected_dark else R.drawable.widget_headphones_selected_light
+                    } else if (on) R.drawable.widget_headphones_dark else R.drawable.widget_headphones)
                 openApp(context, id)?.let { setOnClickPendingIntent(R.id.tv_quick_open, it) }
                 setOnClickPendingIntent(R.id.tv_quick_power, click(context, id, "toggle"))
                 setOnClickPendingIntent(R.id.tv_quick_speaker, click(context, id, "speaker"))
@@ -232,14 +278,10 @@ internal object WidgetUi {
                 setTextViewText(R.id.tv_audio_output, when (output) {
                     "tv_speaker" -> "TV speakers"; "bt_soundbar" -> "Headphones"; else -> "Audio offline"
                 })
-                setInt(R.id.tv_audio_speaker, "setBackgroundResource",
-                    if (output == "tv_speaker") R.drawable.widget_selected else android.R.color.transparent)
-                setInt(R.id.tv_audio_headphones, "setBackgroundResource",
-                    if (output == "bt_soundbar") R.drawable.widget_selected else android.R.color.transparent)
                 setImageViewResource(R.id.tv_audio_speaker,
-                    if (output == "tv_speaker") R.drawable.widget_speaker_dark else R.drawable.widget_speaker)
+                    if (output == "tv_speaker") R.drawable.widget_speaker_selected_light else R.drawable.widget_speaker)
                 setImageViewResource(R.id.tv_audio_headphones,
-                    if (output == "bt_soundbar") R.drawable.widget_headphones_dark else R.drawable.widget_headphones)
+                    if (output == "bt_soundbar") R.drawable.widget_headphones_selected_light else R.drawable.widget_headphones)
                 setOnClickPendingIntent(R.id.tv_audio_minus, click(context, id, "down"))
                 setOnClickPendingIntent(R.id.tv_audio_plus, click(context, id, "up"))
                 setOnClickPendingIntent(R.id.tv_audio_speaker, click(context, id, "speaker"))
@@ -247,7 +289,26 @@ internal object WidgetUi {
                 openApp(context, id)?.let { setOnClickPendingIntent(R.id.tv_audio_open, it) }
             }
         }
-        AppWidgetManager.getInstance(context).updateAppWidget(id, views)
+        val manager = AppWidgetManager.getInstance(context)
+        if (partial) manager.partiallyUpdateAppWidget(id, views)
+        else manager.updateAppWidget(id, views)
+        prefs(context).edit().putLong("rendered_$id", renderStamp(context)).apply()
+    }
+}
+
+class WidgetRepaintWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
+    override fun doWork(): Result = try {
+        val id = inputData.getInt("id", -1)
+        if (id < 0) {
+            AllLightsWidgetProvider.refreshAfterInstall(applicationContext)
+            WidgetUi.renderAllConfigured(applicationContext)
+        } else {
+            WidgetUi.render(applicationContext, id)
+        }
+        Result.success()
+    } catch (error: Throwable) {
+        Log.w("FrogWidget", "Could not repaint widget after launcher setup", error)
+        Result.failure()
     }
 }
 
@@ -279,10 +340,8 @@ class ExtraWidgetWorker(context: Context, params: WorkerParameters) : Worker(con
                     val ip = config.getString("ip")
                     val wasOn = tvIsOn(ip)
                     if (kind == "quick" && (action == "speaker" || action == "headphones")) {
-                        val audio = JSONObject(LampWidgetNative.tvAudio(path, device, action))
-                        audio.optString("error").takeIf(String::isNotEmpty)?.let { throw IllegalStateException(it) }
-                        WidgetUi.setAudio(context, id, audio.getInt("volume"), audio.getString("output"))
                         WidgetUi.setState(context, id, "on")
+                        updateQuickAudio(context, id, path, device, action)
                     } else if (action == "toggle") {
                         if (wasOn) {
                             tvPowerOff(context, config)
@@ -296,9 +355,7 @@ class ExtraWidgetWorker(context: Context, params: WorkerParameters) : Worker(con
                     } else {
                         WidgetUi.setState(context, id, if (wasOn) "on" else "off")
                         if (kind == "quick" && wasOn) {
-                            val audio = JSONObject(LampWidgetNative.tvAudio(path, device, "refresh"))
-                            audio.optString("error").takeIf(String::isNotEmpty)?.let { throw IllegalStateException(it) }
-                            WidgetUi.setAudio(context, id, audio.getInt("volume"), audio.getString("output"))
+                            updateQuickAudio(context, id, path, device, "refresh")
                         }
                     }
                 }
@@ -314,6 +371,17 @@ class ExtraWidgetWorker(context: Context, params: WorkerParameters) : Worker(con
             if (kind == "power" || kind == "quick") WidgetUi.setState(context, id, "unavailable")
             if (kind == "volume" || kind == "audio" || kind == "output") WidgetUi.setAudio(context, id, -1, "")
             Result.failure()
+        }
+    }
+
+    private fun updateQuickAudio(context: Context, id: Int, path: String, device: String, action: String) {
+        val audio = JSONObject(LampWidgetNative.tvAudio(path, device, action))
+        val error = audio.optString("error")
+        if (error.isNotEmpty()) {
+            Log.w("FrogWidget", "TV audio: $error")
+            WidgetUi.setAudio(context, id, -1, "")
+        } else {
+            WidgetUi.setAudio(context, id, audio.getInt("volume"), audio.getString("output"))
         }
     }
 

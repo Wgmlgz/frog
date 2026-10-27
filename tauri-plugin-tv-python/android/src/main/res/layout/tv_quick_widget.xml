@@ -1,7 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/tv_quick_widget" android:layout_width="match_parent" android:layout_height="match_parent"
-    android:orientation="vertical" android:padding="10dp" android:background="@drawable/widget_off">
+    android:background="@drawable/widget_off">
+    <ImageView android:id="@+id/widget_dynamic_background" android:layout_width="match_parent"
+        android:layout_height="match_parent" android:src="@drawable/widget_off"
+        android:scaleType="fitXY" />
+    <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent"
+        android:orientation="vertical" android:padding="10dp">
     <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
         android:orientation="horizontal" android:gravity="center_vertical">
         <LinearLayout android:id="@+id/tv_quick_open" android:layout_width="0dp" android:layout_height="match_parent"
@@ -28,4 +33,5 @@
             android:layout_weight="1" android:padding="11dp" android:src="@drawable/widget_headphones"
             android:scaleType="centerInside" android:contentDescription="Connect headphones" />
     </LinearLayout>
-</LinearLayout>
+    </LinearLayout>
+</FrameLayout>

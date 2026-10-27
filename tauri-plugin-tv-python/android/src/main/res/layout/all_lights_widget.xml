@@ -1,12 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/all_lights_widget"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:gravity="center"
-    android:padding="6dp"
     android:background="@drawable/widget_off">
+    <ImageView android:id="@+id/widget_dynamic_background" android:layout_width="match_parent"
+        android:layout_height="match_parent" android:src="@drawable/widget_off"
+        android:scaleType="fitXY" />
+    <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent"
+        android:orientation="vertical" android:gravity="center" android:padding="6dp">
     <ImageView
         android:id="@+id/widget_power_icon"
         android:layout_width="26dp"
@@ -23,4 +25,5 @@
         android:textColor="#F3F4F6"
         android:textSize="10sp"
         android:layout_marginTop="3dp" />
-</LinearLayout>
+    </LinearLayout>
+</FrameLayout>
