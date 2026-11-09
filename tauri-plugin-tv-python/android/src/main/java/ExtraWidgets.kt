@@ -110,6 +110,7 @@ internal object WidgetUi {
     private fun renderStamp(context: Context) =
         context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime + RENDER_VERSION
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private const val PENDING_TIMEOUT_MS = 45_000L
     fun config(context: Context) = File(context.dataDir, "frog.toml")
     fun type(context: Context, id: Int): String? = when (
         AppWidgetManager.getInstance(context).getAppWidgetInfo(id)?.provider?.className
@@ -130,6 +131,7 @@ internal object WidgetUi {
     fun clear(context: Context, id: Int) {
         prefs(context).edit().remove("device_$id").remove("name_$id")
             .remove("state_$id").remove("volume_$id").remove("output_$id")
+            .remove("pending_count_$id").remove("pending_action_$id").remove("pending_since_$id")
             .remove("rendered_$id").remove("last_update_refresh_$id").apply()
     }
     fun rendered(context: Context, id: Int) =
@@ -142,6 +144,52 @@ internal object WidgetUi {
         return true
     }
     fun state(context: Context, id: Int) = prefs(context).getString("state_$id", "unknown") ?: "unknown"
+    fun isPending(context: Context, id: Int): Boolean {
+        val preferences = prefs(context)
+        return preferences.getInt("pending_count_$id", 0) > 0 &&
+            System.currentTimeMillis() - preferences.getLong("pending_since_$id", 0) < PENDING_TIMEOUT_MS
+    }
+    fun beginAction(context: Context, id: Int, action: String): Boolean {
+        val kind = type(context, id) ?: return false
+        if (device(context, id).isEmpty()) return false
+        val preferences = prefs(context)
+        val alreadyPending = isPending(context, id)
+        val repeatedVolume = (action == "up" || action == "down") && alreadyPending &&
+            preferences.getString("pending_action_$id", "") == "volume"
+        if (alreadyPending && !repeatedVolume) return false
+        val editor = preferences.edit()
+            .putInt("pending_count_$id", if (repeatedVolume) preferences.getInt("pending_count_$id", 0) + 1 else 1)
+            .putString("pending_action_$id", if (action == "up" || action == "down") "volume" else action)
+            .putLong("pending_since_$id", System.currentTimeMillis())
+        when (action) {
+            "toggle" -> if (kind == "lamp" || kind == "power" || kind == "quick") {
+                editor.putString("state_$id", if (state(context, id) == "on") "off" else "on")
+            }
+            "speaker", "headphones" -> editor.putString("output_$id",
+                if (action == "speaker") "tv_speaker" else "bt_soundbar")
+            "up", "down" -> {
+                val volume = preferences.getInt("volume_$id", -1)
+                if (volume >= 0) editor.putInt("volume_$id", (volume + if (action == "up") 1 else -1).coerceIn(0, 100))
+            }
+        }
+        editor.apply()
+        render(context, id, partial = true)
+        return true
+    }
+    fun finishAction(context: Context, id: Int, state: String? = null,
+                     volume: Int? = null, output: String? = null) {
+        val preferences = prefs(context)
+        val remaining = (preferences.getInt("pending_count_$id", 0) - 1).coerceAtLeast(0)
+        val editor = preferences.edit().putInt("pending_count_$id", remaining)
+        if (remaining == 0) {
+            editor.remove("pending_action_$id").remove("pending_since_$id")
+            if (state != null) editor.putString("state_$id", state)
+            if (volume != null) editor.putInt("volume_$id", volume)
+            if (output != null) editor.putString("output_$id", output)
+        }
+        editor.apply()
+        if (remaining == 0) render(context, id)
+    }
     fun setState(context: Context, id: Int, state: String) {
         if (state(context, id) == state) return
         prefs(context).edit().putString("state_$id", state).apply()
@@ -159,8 +207,10 @@ internal object WidgetUi {
             .setInputData(Data.Builder().putInt("id", id).putString("action", action).build())
             .setInitialDelay(delaySeconds, TimeUnit.SECONDS).build()
         WorkManager.getInstance(context).enqueueUniqueWork(
-            if (delaySeconds > 0) "frog_widget_${id}_scheduled" else "frog_widget_$id",
-            ExistingWorkPolicy.APPEND_OR_REPLACE, request
+            if (delaySeconds > 0) "frog_widget_${id}_scheduled"
+            else if (action == "refresh") "frog_widget_${id}_refresh" else "frog_widget_${id}_action",
+            if (action == "refresh") ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.APPEND_OR_REPLACE,
+            request
         )
     }
     fun refreshAll(context: Context) {
@@ -209,7 +259,8 @@ internal object WidgetUi {
             "lamp" -> RemoteViews(context.packageName, R.layout.all_lights_widget).apply {
                 setImageViewResource(R.id.widget_dynamic_background,
                     if (state == "on") R.drawable.widget_on else R.drawable.widget_off)
-                setTextViewText(R.id.widget_label, name(context, id).ifEmpty { "Lamp" }.take(12))
+                setTextViewText(R.id.widget_label,
+                    if (isPending(context, id)) "Wait" else name(context, id).ifEmpty { "Lamp" }.take(12))
                 setTextColor(R.id.widget_label, if (state == "on") Color.rgb(30, 41, 59) else Color.WHITE)
                 setImageViewResource(R.id.widget_power_icon, if (state == "on") R.drawable.widget_power_dark else R.drawable.widget_power)
                 setOnClickPendingIntent(R.id.all_lights_widget, click(context, id, "toggle"))
@@ -222,7 +273,9 @@ internal object WidgetUi {
                 setTextColor(R.id.tv_power_status, foreground)
                 setTextViewText(R.id.tv_power_title, name(context, id).ifEmpty { "TV" }.take(18))
                 setTextViewText(R.id.tv_power_status, when (state) {
-                    "on" -> "On"; "off" -> "Off"; "starting" -> "Starting…"; "unavailable" -> "Offline"; else -> "Checking…"
+                    "on" -> if (isPending(context, id)) "Turning on…" else "On"
+                    "off" -> if (isPending(context, id)) "Turning off…" else "Off"
+                    "starting" -> "Starting…"; "unavailable" -> "Offline"; else -> "Checking…"
                 })
                 setImageViewResource(R.id.tv_power_button_icon, if (state == "on") R.drawable.widget_power_dark else R.drawable.widget_power)
                 openApp(context, id)?.let { setOnClickPendingIntent(R.id.tv_power_open, it) }
@@ -251,9 +304,15 @@ internal object WidgetUi {
                 val foreground = if (on) Color.rgb(30, 41, 59) else Color.WHITE
                 val output = prefs(context).getString("output_$id", "")
                 setTextViewText(R.id.tv_quick_title, name(context, id).ifEmpty { "TV" }.take(18))
-                setTextViewText(R.id.tv_quick_status, when (state) {
-                    "on" -> if (output.isNullOrEmpty()) "Audio unavailable" else "On"
-                    "off" -> "Off"; "starting" -> "Starting…"; "unavailable" -> "Offline"; else -> "Checking…"
+                setTextViewText(R.id.tv_quick_status, when {
+                    isPending(context, id) && prefs(context).getString("pending_action_$id", "") == "toggle" ->
+                        if (on) "Turning on…" else "Turning off…"
+                    isPending(context, id) -> "Switching audio…"
+                    state == "on" -> if (output.isNullOrEmpty()) "Audio unavailable" else "On"
+                    state == "off" -> "Off"
+                    state == "starting" -> "Starting…"
+                    state == "unavailable" -> "Offline"
+                    else -> "Checking…"
                 })
                 setTextColor(R.id.tv_quick_title, foreground)
                 setTextColor(R.id.tv_quick_status, foreground)
@@ -315,7 +374,12 @@ class WidgetRepaintWorker(context: Context, params: WorkerParameters) : Worker(c
 class ExtraWidgetTapReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != "com.wgmlgz.frog.WIDGET_ACTION") return
-        WidgetUi.enqueue(context, intent.getIntExtra("id", -1), intent.getStringExtra("widgetAction") ?: return)
+        val id = intent.getIntExtra("id", -1)
+        val action = intent.getStringExtra("widgetAction") ?: return
+        if (WidgetUi.beginAction(context, id, action)) {
+            WidgetUi.enqueue(context, id, action)
+            WidgetUi.enqueue(context, id, "refresh", 50)
+        }
     }
 }
 
@@ -327,12 +391,14 @@ class ExtraWidgetWorker(context: Context, params: WorkerParameters) : Worker(con
         val device = WidgetUi.device(context, id)
         val action = inputData.getString("action") ?: "refresh"
         val path = WidgetUi.config(context).absolutePath
+        if (action == "refresh" && WidgetUi.isPending(context, id)) return Result.success()
         return try {
             when (kind) {
                 "lamp" -> {
                     val result = JSONObject(LampWidgetNative.lamp(path, device, action == "toggle"))
                     result.optString("error").takeIf(String::isNotEmpty)?.let { throw IllegalStateException(it) }
-                    WidgetUi.setState(context, id, result.getString("state"))
+                    if (action == "toggle") WidgetUi.finishAction(context, id, state = result.getString("state"))
+                    else if (!WidgetUi.isPending(context, id)) WidgetUi.setState(context, id, result.getString("state"))
                 }
                 "power", "quick" -> {
                     val config = JSONObject(LampWidgetNative.tvConfig(path, device))
@@ -340,49 +406,65 @@ class ExtraWidgetWorker(context: Context, params: WorkerParameters) : Worker(con
                     val ip = config.getString("ip")
                     val wasOn = tvIsOn(ip)
                     if (kind == "quick" && (action == "speaker" || action == "headphones")) {
-                        WidgetUi.setState(context, id, "on")
-                        updateQuickAudio(context, id, path, device, action)
+                        val audio = readQuickAudio(path, device, action)
+                        WidgetUi.finishAction(context, id, state = "on", volume = audio.first, output = audio.second)
                     } else if (action == "toggle") {
                         if (wasOn) {
                             tvPowerOff(context, config)
-                            WidgetUi.setState(context, id, "off")
-                            if (kind == "quick") WidgetUi.setAudio(context, id, -1, "")
+                            WidgetUi.finishAction(context, id, state = "off",
+                                volume = if (kind == "quick") -1 else null,
+                                output = if (kind == "quick") "" else null)
                         } else {
                             wakeTv(config)
-                            WidgetUi.setState(context, id, "starting")
+                            WidgetUi.finishAction(context, id, state = "starting")
                         }
                         WidgetUi.enqueue(context, id, "refresh", 15)
                     } else {
-                        WidgetUi.setState(context, id, if (wasOn) "on" else "off")
-                        if (kind == "quick" && wasOn) {
-                            updateQuickAudio(context, id, path, device, "refresh")
+                        if (!WidgetUi.isPending(context, id)) {
+                            WidgetUi.setState(context, id, if (wasOn) "on" else "off")
+                            if (kind == "quick" && wasOn) {
+                                val audio = try { readQuickAudio(path, device, "refresh") }
+                                catch (error: Exception) {
+                                    Log.w("FrogWidget", "TV audio refresh failed", error)
+                                    -1 to ""
+                                }
+                                if (!WidgetUi.isPending(context, id)) WidgetUi.setAudio(context, id, audio.first, audio.second)
+                            }
                         }
                     }
                 }
                 "volume", "audio", "output" -> {
                     val result = JSONObject(LampWidgetNative.tvAudio(path, device, action))
                     result.optString("error").takeIf(String::isNotEmpty)?.let { throw IllegalStateException(it) }
-                    WidgetUi.setAudio(context, id, result.getInt("volume"), result.getString("output"))
+                    if (action == "refresh") {
+                        if (!WidgetUi.isPending(context, id)) WidgetUi.setAudio(context, id, result.getInt("volume"), result.getString("output"))
+                    } else WidgetUi.finishAction(context, id, volume = result.getInt("volume"), output = result.getString("output"))
                 }
             }
             Result.success()
         } catch (error: Throwable) {
             Log.w("FrogWidget", "Widget $kind action $action failed", error)
-            if (kind == "power" || kind == "quick") WidgetUi.setState(context, id, "unavailable")
-            if (kind == "volume" || kind == "audio" || kind == "output") WidgetUi.setAudio(context, id, -1, "")
+            if (action == "refresh") {
+                if (!WidgetUi.isPending(context, id)) {
+                    if (kind == "power" || kind == "quick") WidgetUi.setState(context, id, "unavailable")
+                    if (kind == "volume" || kind == "audio" || kind == "output") WidgetUi.setAudio(context, id, -1, "")
+                }
+            } else if (kind == "quick" && (action == "speaker" || action == "headphones")) {
+                WidgetUi.finishAction(context, id, state = "on", volume = -1, output = "")
+            } else if (kind == "power" || kind == "quick") {
+                WidgetUi.finishAction(context, id, state = "unavailable")
+            } else if (kind == "lamp") {
+                WidgetUi.finishAction(context, id, state = "unavailable")
+            } else WidgetUi.finishAction(context, id, volume = -1, output = "")
             Result.failure()
         }
     }
 
-    private fun updateQuickAudio(context: Context, id: Int, path: String, device: String, action: String) {
+    private fun readQuickAudio(path: String, device: String, action: String): Pair<Int, String> {
         val audio = JSONObject(LampWidgetNative.tvAudio(path, device, action))
         val error = audio.optString("error")
-        if (error.isNotEmpty()) {
-            Log.w("FrogWidget", "TV audio: $error")
-            WidgetUi.setAudio(context, id, -1, "")
-        } else {
-            WidgetUi.setAudio(context, id, audio.getInt("volume"), audio.getString("output"))
-        }
+        if (error.isNotEmpty()) throw IllegalStateException(error)
+        return audio.getInt("volume") to audio.getString("output")
     }
 
     private fun tvIsOn(ip: String): Boolean = try {

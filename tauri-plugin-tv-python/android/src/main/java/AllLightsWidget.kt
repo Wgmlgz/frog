@@ -57,6 +57,8 @@ class AllLightsWidgetProvider : AppWidgetProvider() {
         private const val RENDER_VERSION = 3
         private const val WORK_NAME = "frog_lights_widget_work"
         private const val STATE = "state"
+        private const val PENDING = "pending"
+        private const val PENDING_SINCE = "pending_since"
 
         fun refreshAfterInstall(context: Context) {
             renderAll(context)
@@ -69,17 +71,44 @@ class AllLightsWidgetProvider : AppWidgetProvider() {
             enqueue(context, false)
         }
 
-        fun enqueue(context: Context, toggle: Boolean) {
+        fun enqueue(context: Context, toggle: Boolean, delaySeconds: Long = 0) {
             val widgets = AppWidgetManager.getInstance(context).getAppWidgetIds(
                 ComponentName(context, AllLightsWidgetProvider::class.java)
             )
             if (widgets.isEmpty()) return
             val request = OneTimeWorkRequestBuilder<LampWidgetWorker>()
                 .setInputData(Data.Builder().putBoolean("toggle", toggle).build())
+                .setInitialDelay(delaySeconds, java.util.concurrent.TimeUnit.SECONDS)
                 .build()
             WorkManager.getInstance(context).enqueueUniqueWork(
-                WORK_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, request
+                if (toggle) "${WORK_NAME}_action" else if (delaySeconds > 0) "${WORK_NAME}_recovery" else "${WORK_NAME}_refresh",
+                if (toggle) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.REPLACE,
+                request
             )
+        }
+
+        fun isPending(context: Context): Boolean {
+            val preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            return preferences.getBoolean(PENDING, false) &&
+                System.currentTimeMillis() - preferences.getLong(PENDING_SINCE, 0) < 45_000
+        }
+
+        fun beginToggle(context: Context): Boolean {
+            if (isPending(context)) return false
+            val preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val target = if (preferences.getString(STATE, "off") == "on") "off" else "on"
+            preferences.edit().putBoolean(PENDING, true)
+                .putLong(PENDING_SINCE, System.currentTimeMillis())
+                .putString(STATE, target).apply()
+            renderAll(context, partial = true)
+            return true
+        }
+
+        fun finishToggle(context: Context, state: String) {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putBoolean(PENDING, false).remove(PENDING_SINCE)
+                .putString(STATE, state).apply()
+            renderAll(context)
         }
 
         fun setState(context: Context, state: String) {
@@ -106,13 +135,12 @@ class AllLightsWidgetProvider : AppWidgetProvider() {
                     "busy" -> "Wait"
                     "empty" -> "Add light"
                     "unavailable" -> "Offline"
-                    else -> "Lights"
+                    else -> if (isPending(context)) "Wait" else "Lights"
                 })
                 views.setTextColor(R.id.widget_label, Color.WHITE)
-                if (state == "on") {
-                    views.setTextColor(R.id.widget_label, Color.rgb(30, 41, 59))
-                    views.setImageViewResource(R.id.widget_power_icon, R.drawable.widget_power_dark)
-                }
+                if (state == "on") views.setTextColor(R.id.widget_label, Color.rgb(30, 41, 59))
+                views.setImageViewResource(R.id.widget_power_icon,
+                    if (state == "on") R.drawable.widget_power_dark else R.drawable.widget_power)
                 val intent = Intent(context, LampWidgetTapReceiver::class.java).apply {
                     action = LampWidgetTapReceiver.ACTION_TOGGLE
                 }
@@ -130,7 +158,10 @@ class AllLightsWidgetProvider : AppWidgetProvider() {
 class LampWidgetTapReceiver : android.content.BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ACTION_TOGGLE) return
-        AllLightsWidgetProvider.enqueue(context, true)
+        if (AllLightsWidgetProvider.beginToggle(context)) {
+            AllLightsWidgetProvider.enqueue(context, true)
+            AllLightsWidgetProvider.enqueue(context, false, 50)
+        }
     }
 
     companion object {
@@ -141,10 +172,13 @@ class LampWidgetTapReceiver : android.content.BroadcastReceiver() {
 class LampWidgetWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
     override fun doWork(): Result {
         val config = File(applicationContext.dataDir, "frog.toml")
+        val toggle = inputData.getBoolean("toggle", false)
+        if (!toggle && AllLightsWidgetProvider.isPending(applicationContext)) return Result.success()
         return try {
-            val response = JSONObject(LampWidgetNative.run(config.absolutePath, inputData.getBoolean("toggle", false)))
+            val response = JSONObject(LampWidgetNative.run(config.absolutePath, toggle))
             val state = response.optString("state", "unavailable")
-            AllLightsWidgetProvider.setState(applicationContext, state)
+            if (toggle) AllLightsWidgetProvider.finishToggle(applicationContext, state)
+            else if (!AllLightsWidgetProvider.isPending(applicationContext)) AllLightsWidgetProvider.setState(applicationContext, state)
             val error = response.optString("error")
             if (error.isNotEmpty()) {
                 Log.w("FrogWidget", error)
@@ -154,7 +188,8 @@ class LampWidgetWorker(context: Context, params: WorkerParameters) : Worker(cont
             }
         } catch (error: Exception) {
             Log.w("FrogWidget", "Could not update lights", error)
-            AllLightsWidgetProvider.setState(applicationContext, "unavailable")
+            if (toggle) AllLightsWidgetProvider.finishToggle(applicationContext, "unavailable")
+            else if (!AllLightsWidgetProvider.isPending(applicationContext)) AllLightsWidgetProvider.setState(applicationContext, "unavailable")
             Result.failure()
         }
     }
