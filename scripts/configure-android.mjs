@@ -42,8 +42,11 @@ if (!source.includes('pluginManagement {')) {
         google()
     }
 }
-
 ${source}`
+  writeFileSync(settings, source)
+}
+if (!source.includes("include ':wear'")) {
+  source += `\ninclude ':wear'\nproject(':wear').projectDir = new File(rootDir, '../../../wear')\n`
   writeFileSync(settings, source)
 }
 

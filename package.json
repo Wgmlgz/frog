@@ -14,6 +14,8 @@
     "android:build:apk": "node scripts/configure-android.mjs && tauri android build --apk --target aarch64",
     "android:build:debug": "node scripts/configure-android.mjs && tauri android build --debug --apk --target aarch64",
     "android:build:aab": "node scripts/configure-android.mjs && tauri android build --aab --target aarch64 --target x86_64",
+    "wear:build:debug": "node scripts/build-wear.mjs",
+    "wear:build:release": "node scripts/build-wear.mjs --release",
     "sidecar": "node scripts/build-sidecar.mjs"
   },
   "dependencies": {

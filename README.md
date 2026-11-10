@@ -72,3 +72,9 @@ The Android launcher includes a 1×1 **All lights** widget. Add it from the laun
 
 Other Android widgets are **One lamp** (1×1), **TV power** (2×1), **TV volume** (2×1), **TV output** (2×1), **TV audio** (2×2), and **TV quick controls** (2×2). Adding one opens a device picker so each instance controls the selected lamp or TV. On the TV power widget, the power button switches the TV off through the paired webOS remote or wakes it with Wake-on-LAN; tapping the larger name/status area opens Frog. TV volume has minus and plus buttons, TV output switches between speakers and headphones, TV audio combines volume and output controls, and TV quick controls combines power and output switching. TV audio widgets require the root SSH key already used by the app, while TV wake requires a correct MAC and broadcast address and Wake-on-LAN enabled on the TV. Widget network operations run in Android background work.
 
+### Pixel Watch / Wear OS
+
+Run `npm run wear:build:debug` to build the separate watch APK at `wear/build/outputs/apk/debug/wear-debug.apk`. Install it on a paired Wear OS watch and install the current debug Android APK on the phone. Both use the same application ID and Gradle debug signing key, as required by the Wear OS Data Layer. For release builds, configure `src-tauri/gen/android/keystore.properties` so the phone and watch APKs share a signing key, then run `npm run wear:build:release`.
+
+The watch app provides All lights, TV power, speaker/headphone output, volume, and individual lamp controls. Its Tile provides All lights, TV power, and audio output switching. The phone executes commands through its existing Android widget backend, so it must be connected to the watch and able to reach the devices. Add the Frog Tile from the watch's Tile picker after installation.
+
