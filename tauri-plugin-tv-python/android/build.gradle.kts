@@ -8,7 +8,7 @@ plugins {
 
 android {
     namespace = "com.wgmlgz.frog.tvpython"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         minSdk = 24
