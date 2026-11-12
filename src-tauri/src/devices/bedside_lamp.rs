@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     net::{Ipv4Addr, SocketAddrV4, UdpSocket},
+    path::Path,
     sync::{
         atomic::{AtomicU32, Ordering},
         OnceLock,
@@ -26,6 +27,8 @@ pub(crate) struct LampConfig {
     pub ip: String,
     pub device_id: u32,
     pub token: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_brightness: Option<u8>,
 }
 
 impl Default for LampConfig {
@@ -34,6 +37,7 @@ impl Default for LampConfig {
             ip: "0.0.0.0".into(),
             device_id: 0,
             token: String::new(),
+            last_brightness: None,
         }
     }
 }
@@ -82,6 +86,12 @@ impl LampConfig {
             .map_err(|_| "Lamp address must be an IPv4 address")?;
         if !self.token.is_empty() && !valid_token(&self.token) {
             return Err("Lamp token must be 32 hexadecimal characters".into());
+        }
+        if self
+            .last_brightness
+            .is_some_and(|value| !(1..=100).contains(&value))
+        {
+            return Err("Saved lamp brightness must be 1 to 100".into());
         }
         Ok(())
     }
@@ -276,14 +286,57 @@ pub(crate) fn read_state(config: &LampConfig) -> Result<LampState, String> {
     })
 }
 
-#[cfg(target_os = "android")]
-pub(crate) fn set_power_direct(config: &LampConfig, on: bool) -> Result<(), String> {
+fn set_power_direct(config: &LampConfig, on: bool) -> Result<(), String> {
     let result = send(config, "set_power", json!([if on { "on" } else { "off" }]))?;
-    if result.as_array().is_some_and(|items| items.first().and_then(Value::as_str) == Some("ok")) {
+    if result
+        .as_array()
+        .is_some_and(|items| items.first().and_then(Value::as_str) == Some("ok"))
+    {
         Ok(())
     } else {
         Err(format!("Lamp did not confirm command: {result}"))
     }
+}
+
+pub(crate) fn set_power_preserving_brightness(
+    config_path: &Path,
+    device_id: &str,
+    on: bool,
+) -> Result<LampState, String> {
+    let store = config::read_file(config_path)?;
+    let config = match &store.device(device_id)?.settings {
+        DeviceSettings::BedsideLamp(config) | DeviceSettings::ColorBulb(config) => config,
+        _ => return Err("Selected device is not a lamp".into()),
+    };
+    let before = read_state(config)?;
+    if before.power == on {
+        return Ok(before);
+    }
+    if !on && (1..=100).contains(&before.brightness) {
+        config::update_file(config_path, |store| {
+            let settings = &mut store.device_mut(device_id)?.settings;
+            match settings {
+                DeviceSettings::BedsideLamp(config) | DeviceSettings::ColorBulb(config) => {
+                    config.last_brightness = Some(before.brightness);
+                    Ok(())
+                }
+                _ => Err("Selected device is not a lamp".into()),
+            }
+        })?;
+    }
+    set_power_direct(config, on)?;
+    if on {
+        if let Some(brightness) = config.last_brightness {
+            let result = send(config, "set_bright", json!([brightness]))?;
+            if !result
+                .as_array()
+                .is_some_and(|items| items.first().and_then(Value::as_str) == Some("ok"))
+            {
+                return Err(format!("Lamp did not confirm brightness restore: {result}"));
+            }
+        }
+    }
+    read_state(config)
 }
 
 pub(crate) fn device_model(config: &LampConfig) -> Result<String, String> {
@@ -365,12 +418,7 @@ pub(crate) async fn set_lamp_power(
 ) -> Result<LampState, String> {
     let refresh_app = app.clone();
     let state = tauri::async_runtime::spawn_blocking(move || {
-        change(
-            app,
-            &device_id,
-            "set_power",
-            json!([if on { "on" } else { "off" }]),
-        )
+        set_power_preserving_brightness(&config::path(&app)?, &device_id, on)
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -459,6 +507,7 @@ mod tests {
             ip: std::env::var("FROG_LAMP_TEST_IP").unwrap_or_else(|_| "192.168.31.237".into()),
             device_id: LAMP_DEVICE_ID,
             token: value["token"].as_str().unwrap().into(),
+            last_brightness: None,
         };
         let before = read_state(&config).unwrap();
         assert_eq!(device_model(&config).unwrap(), "yeelink.light.bslamp1");

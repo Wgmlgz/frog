@@ -77,7 +77,7 @@ fn lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-fn path(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir.join("frog.toml"))
@@ -98,6 +98,27 @@ pub(crate) fn parse(source: &str) -> Result<AppConfig, String> {
         toml::from_str(source).map_err(|e| format!("Invalid Frog config: {e}"))?;
     validate(&config)?;
     Ok(config)
+}
+
+pub(crate) fn read_file(path: &Path) -> Result<AppConfig, String> {
+    let _guard = lock().lock().map_err(|e| e.to_string())?;
+    parse(&fs::read_to_string(path).map_err(|e| e.to_string())?)
+}
+
+pub(crate) fn update_file<T>(
+    path: &Path,
+    edit: impl FnOnce(&mut AppConfig) -> Result<T, String>,
+) -> Result<T, String> {
+    let _guard = lock().lock().map_err(|e| e.to_string())?;
+    let mut config = parse(&fs::read_to_string(path).map_err(|e| e.to_string())?)?;
+    let result = edit(&mut config)?;
+    validate(&config)?;
+    fs::write(
+        path,
+        toml::to_string_pretty(&config).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(result)
 }
 
 fn validate(config: &AppConfig) -> Result<(), String> {
@@ -353,6 +374,7 @@ mod tests {
         tv.webos_client_key = "pairing-secret".into();
         let mut lamp = LampConfig::default();
         lamp.token = "0123456789abcdef0123456789abcdef".into();
+        lamp.last_brightness = Some(73);
         let config = AppConfig {
             version: VERSION,
             xiaomi_accounts: vec![SavedXiaomiAccount {
@@ -388,6 +410,7 @@ mod tests {
             panic!("lamp changed type")
         };
         assert_eq!(lamp.token, "0123456789abcdef0123456789abcdef");
+        assert_eq!(lamp.last_brightness, Some(73));
         assert!(!text.contains("root_key_path"));
     }
 

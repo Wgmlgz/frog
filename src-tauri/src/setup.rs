@@ -48,6 +48,7 @@ fn save_lamp(
         ip: ip.into(),
         device_id,
         token: token.into(),
+        last_brightness: None,
     };
     lamp.validate()?;
     if lamp.token.is_empty() {

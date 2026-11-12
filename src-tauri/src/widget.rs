@@ -21,11 +21,13 @@ use std::{
 fn run(config_path: &str, toggle: bool) -> Result<&'static str, String> {
     let source = fs::read_to_string(config_path).map_err(|e| e.to_string())?;
     let store = config::parse(&source)?;
-    let lamps: Vec<&LampConfig> = store
+    let lamps: Vec<(&str, &LampConfig)> = store
         .devices
         .iter()
         .filter_map(|device| match &device.settings {
-            DeviceSettings::BedsideLamp(config) | DeviceSettings::ColorBulb(config) => Some(config),
+            DeviceSettings::BedsideLamp(config) | DeviceSettings::ColorBulb(config) => {
+                Some((device.id.as_str(), config))
+            }
             DeviceSettings::Tv(_) => None,
         })
         .collect();
@@ -36,7 +38,7 @@ fn run(config_path: &str, toggle: bool) -> Result<&'static str, String> {
     let states: Vec<_> = thread::scope(|scope| {
         let jobs: Vec<_> = lamps
             .iter()
-            .map(|lamp| scope.spawn(move || bedside_lamp::read_state(lamp)))
+            .map(|(_, lamp)| scope.spawn(move || bedside_lamp::read_state(lamp)))
             .collect();
         jobs.into_iter()
             .map(|job| {
@@ -74,12 +76,20 @@ fn run(config_path: &str, toggle: bool) -> Result<&'static str, String> {
     let failures = thread::scope(|scope| {
         let jobs: Vec<_> = lamps
             .iter()
-            .map(|lamp| scope.spawn(move || bedside_lamp::set_power_direct(lamp, target_on)))
+            .map(|(id, _)| {
+                scope.spawn(move || {
+                    bedside_lamp::set_power_preserving_brightness(
+                        Path::new(config_path),
+                        id,
+                        target_on,
+                    )
+                })
+            })
             .collect();
         jobs.into_iter()
             .enumerate()
             .filter_map(|(index, job)| match job.join() {
-                Ok(Ok(())) => None,
+                Ok(Ok(_)) => None,
                 Ok(Err(error)) => Some(format!("Lamp {}: {error}", index + 1)),
                 Err(_) => Some(format!("Lamp {}: command worker failed", index + 1)),
             })
@@ -221,7 +231,7 @@ pub extern "system" fn Java_com_wgmlgz_frog_tvpython_LampWidgetNative_lamp(
         let lamp = lamp_config(&store, &id)?;
         let state = bedside_lamp::read_state(lamp)?;
         if toggle != 0 {
-            bedside_lamp::set_power_direct(lamp, !state.power)?;
+            bedside_lamp::set_power_preserving_brightness(Path::new(&path), &id, !state.power)?;
             Ok(json!({"state":if state.power { "off" } else { "on" }}))
         } else {
             Ok(json!({"state":if state.power { "on" } else { "off" }}))
