@@ -8,7 +8,7 @@ plugins {
 
 android {
     namespace = "com.wgmlgz.frog.wear"
-    compileSdk = 37
+    compileSdk = 36
     defaultConfig {
         applicationId = "com.wgmlgz.frog"
         minSdk = 30

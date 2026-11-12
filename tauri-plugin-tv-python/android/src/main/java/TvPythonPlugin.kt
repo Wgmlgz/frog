@@ -1,6 +1,5 @@
 package com.wgmlgz.frog.tvpython
 
-import android.Manifest
 import android.app.Activity
 import android.content.pm.PackageManager
 import android.content.ClipboardManager
@@ -32,14 +31,17 @@ object TvPythonBridge {
     }
 }
 
+// API 37 permission name kept as a string so we can compile against the stable API 36 SDK.
+private const val LOCAL_NETWORK_PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK"
+
 @TauriPlugin
 class TvPythonPlugin(private val activity: Activity) : Plugin(activity) {
     private val worker = Executors.newSingleThreadExecutor()
 
     override fun load(webView: WebView) {
         if (Build.VERSION.SDK_INT >= 37 && activity.applicationInfo.targetSdkVersion >= 37 &&
-            activity.checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK) != PackageManager.PERMISSION_GRANTED) {
-            activity.requestPermissions(arrayOf(Manifest.permission.ACCESS_LOCAL_NETWORK), 3701)
+            activity.checkSelfPermission(LOCAL_NETWORK_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            activity.requestPermissions(arrayOf(LOCAL_NETWORK_PERMISSION), 3701)
         }
     }
 
